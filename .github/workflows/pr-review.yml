@@ -24,7 +24,8 @@ jobs:
                -H "Accept: application/vnd.github.v3.diff" \
                https://api.github.com/repos/$REPO/pulls/$PR_NUMBER > pr.diff
           echo "Diff saved to pr.diff"
-
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
       - name: Send diff to local review bot (Ollama)
         id: ollama
         run: |
