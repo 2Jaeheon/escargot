@@ -14,7 +14,7 @@ app = FastAPI()
 async def review_code(req: Request):
     """
     Receives a JSON payload: { "diff": "<git diff contents>" }
-    But we read the raw body first to avoid JSONDecodeError on control chars.
+    Reads raw body first to avoid JSONDecodeError on control chars.
     """
     try:
         raw_body = await req.body()
