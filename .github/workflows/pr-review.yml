@@ -45,6 +45,12 @@ jobs:
           cat review.txt || true
           echo "=== REVIEW CONTENT END ==="
 
+      - name: Debug review content
+        run: |
+          echo "=== REVIEW CONTENT START ==="
+          cat review.txt || true
+          echo
+          echo "=== REVIEW CONTENT END ==="
       - name: Post review comment to PR
         run: |
           if [ ! -s review.txt ]; then
