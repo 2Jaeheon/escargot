@@ -20,10 +20,6 @@ async def review_diff(request: DiffRequest):
         You are a senior software engineer performing a code review.
         Examine the following git diff and provide inline review comments.
 
-        Review guidelines:
-        • Do NOT mark a variable/function as "unused" unless its definition appears in the diff *and* there is clearly no usage inside the diff. The usage may exist outside the diff.
-        • Be conservative; if you are not 100 % certain, skip that comment.
-
         Output FORMAT (must be **valid JSON only**, no markdown, no explanation):
         [
           {{

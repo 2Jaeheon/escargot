@@ -16,7 +16,7 @@ jobs:
         id: diff
         run: |
           git fetch origin ${{ github.base_ref }}
-          DIFF=$(git diff --unified=20 origin/${{ github.base_ref }} HEAD)
+          DIFF=$(git diff origin/${{ github.base_ref }} HEAD)
           echo "diff<<EOF" >> $GITHUB_OUTPUT
           echo "$DIFF" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -46,16 +46,15 @@ jobs:
         uses: actions/github-script@v6
         env:
           INLINE_COMMENTS: "${{ steps.review.outputs.result }}"
-          GIT_DIFF: "${{ steps.diff.outputs.diff }}"
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const diff = process.env.GIT_DIFF || '';
-            const raw = process.env.INLINE_COMMENTS || '[]';
+            let raw = process.env.INLINE_COMMENTS || '[]';
             console.log('INLINE_COMMENTS raw:', raw);
             let comments;
             try {
               comments = JSON.parse(raw);
+              // sometimes one level of quotes 더 있을 수 있음
               if (typeof comments === 'string') {
                 comments = JSON.parse(comments);
               }
@@ -63,74 +62,17 @@ jobs:
               console.log('JSON parse error:', e);
               comments = [];
             }
-
-            // Build mapping of { filePath: { newLineNumber: diffPosition } }
-            function buildPositionMap(diffText) {
-              const map = {};
-              let currentFile = null;
-              let newLine = 0;
-              let position = 0;
-              for (const line of diffText.split('\n')) {
-                if (line.startsWith('diff --git')) {
-                  currentFile = null;
-                  continue;
-                }
-                if (line.startsWith('+++ b/')) {
-                  currentFile = line.slice(6).trim();
-                  if (!map[currentFile]) map[currentFile] = {};
-                  continue;
-                }
-                if (!currentFile) continue;
-                if (line.startsWith('@@')) {
-                  const m = /@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
-                  if (m) {
-                    newLine = parseInt(m[1], 10);
-                  }
-                  continue;
-                }
-                position += 1;
-                const firstChar = line[0];
-                if (firstChar === '+') {
-                  map[currentFile][newLine] = position;
-                  newLine += 1;
-                } else if (firstChar === ' ') {
-                  map[currentFile][newLine] = position;
-                  newLine += 1;
-                } else if (firstChar === '-') {
-                  // removed line; do nothing for newLine
-                }
-              }
-              return map;
-            }
-
-            const positionMap = buildPositionMap(diff);
-
-            const formatted = [];
-            for (const c of comments) {
-              if (!c.path || typeof c.line !== 'number' || !c.body) continue;
-              const pos = positionMap[c.path]?.[c.line];
-              if (!pos) {
-                console.log(`Skipping comment on ${c.path}:${c.line} - not in diff`);
-                continue;
-              }
-              formatted.push({
-                path: c.path,
-                position: pos,
-                body: c.body
-              });
-            }
-
-            console.log('Formatted comments:', formatted);
-            if (formatted.length === 0) {
-              console.log('No valid inline comments to post.');
+            console.log('Parsed comments array:', comments);
+            if (!Array.isArray(comments) || comments.length === 0) {
+              console.log('No inline comments generated.');
               return;
             }
-
+            const commitId = context.payload.pull_request.head.sha;
             await github.rest.pulls.createReview({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: context.issue.number,
-              commit_id: context.payload.pull_request.head.sha,
+              commit_id: commitId,
               event: 'COMMENT',
-              comments: formatted
+              comments
             });
