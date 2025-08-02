@@ -62,7 +62,8 @@ jobs:
               console.log('JSON parse error:', e);
               comments = [];
             }
-            console.log('Parsed comments array:', comments);
+            comments = comments.filter(c => typeof c.line === 'number' && Number.isInteger(c.line) && c.line > 0);
+              console.log('Filtered comments:', comments);
             if (!Array.isArray(comments) || comments.length === 0) {
               console.log('No inline comments generated.');
               return;
