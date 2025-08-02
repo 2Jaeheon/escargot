@@ -14,39 +14,34 @@ app = FastAPI()
 async def review_code(req: Request):
     """
     Receives: { "diff": "<git diff contents>" }
-    Returns: JSON array of inline review comments
-    Example:
+    Returns: array of inline review comments:
     [
-      {"path": "src/BuiltinIterator.cpp", "line": 123, "comment": "Consider null-check here."}
+      {"path": "src/BuiltinIterator.cpp", "position": 12, "body": "Consider null-check here."}
     ]
     """
     try:
         data = await req.json()
     except Exception as e:
-        return {"error": f"Invalid JSON received: {e}"}
+        return {"error": f"Invalid JSON: {e}"}
 
     diff = data.get("diff", "")
     if not diff.strip():
         return []
 
+    # LLM prompt to produce correct JSON array
     prompt = f"""
-You are a strict code reviewer for the Escargot JavaScript engine project.
+You are a code reviewer for the Escargot JavaScript engine project.
 
-The diff is from a C++ ECMAScript engine implementation.
-Analyze the changes and produce inline code review comments for the modified lines.
+Analyze the following git diff and produce inline code review comments.
+The output must be a valid JSON array of objects with:
+- "path": the relative file path from the repo root
+- "position": the position in the diff (integer, counting from 1 in the diff hunk)
+- "body": the comment text
 
-Rules:
-- Output ONLY valid JSON array
-- Each element must have:
-  - "path": exact file path from the diff (relative to repo root)
-  - "line": the line number in the NEW file where the issue is found
-  - "comment": a concise suggestion explaining the issue and how to improve it
-- Do NOT include explanations outside JSON
-- Focus on ECMAScript spec compliance, performance, style, and potential bugs
-
-Example output:
+Only comment on meaningful issues.
+Example:
 [
-  {{"path": "src/BuiltinIterator.cpp", "line": 123, "comment": "Consider null-check here to follow ECMAScript spec."}}
+  {{"path": "src/BuiltinIterator.cpp", "position": 12, "body": "Consider adding null-check to avoid crash."}}
 ]
 
 Diff to review:
@@ -65,14 +60,13 @@ Diff to review:
 
     try:
         raw_response = ollama_resp.json().get("response", "").strip()
-        # Ensure valid JSON
-        review_json = json.loads(raw_response)
-        if not isinstance(review_json, list):
-            return {"error": "LLM did not return a list"}
+        review_array = json.loads(raw_response)
+        if not isinstance(review_array, list):
+            return {"error": "LLM did not return an array", "raw": raw_response}
     except Exception as e:
         return {"error": f"Invalid JSON from Ollama: {e}", "raw": raw_response}
 
-    return review_json
+    return review_array
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=3000)
