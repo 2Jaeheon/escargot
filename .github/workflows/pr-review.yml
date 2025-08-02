@@ -1,4 +1,4 @@
-name: PR Code Review Bot
+name: PR Code Review Bot (Inline Comments)
 
 on:
   pull_request:
@@ -6,7 +6,6 @@ on:
 
 jobs:
   review:
-    # fork에서만 동작
     if: github.repository == '2Jaeheon/escargot'
     runs-on: ubuntu-latest
 
@@ -20,53 +19,45 @@ jobs:
           sudo apt-get install -y jq curl
 
       - name: Get PR diff
-        id: diff
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
-          echo "Getting diff for PR #$PR_NUMBER in $REPO"
+          echo "Getting diff for PR #$PR_NUMBER"
           curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
                -H "Accept: application/vnd.github.v3.diff" \
                https://api.github.com/repos/$REPO/pulls/$PR_NUMBER > pr.diff
-          echo "Diff saved to pr.diff"
-      - name: Debug PR diff
-        run: |
-          echo "===== BEGIN DIFF ====="
+          echo "=== DIFF START ==="
           cat pr.diff
-          echo "===== END DIFF ====="
-      - name: Send diff to local review bot (Ollama) safely
-        id: ollama
+          echo "=== DIFF END ==="
+
+      - name: Send diff to local review bot
         run: |
-          echo "Sending diff to Ollama server at ${{ secrets.LOCAL_REVIEW_URL }}/review"
           REVIEW=$(jq -Rs '{diff: .}' pr.diff | \
             curl -s "${{ secrets.LOCAL_REVIEW_URL }}/review" \
               -H "Content-Type: application/json" \
               -d @-)
-          echo "$REVIEW" > review.txt
-          echo "review<<EOF" >> $GITHUB_OUTPUT
-          cat review.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "$REVIEW" > review.json
+          echo "=== REVIEW JSON ==="
+          cat review.json
 
-      - name: Debug review content
+      - name: Post inline review comments
         run: |
-          echo "=== REVIEW CONTENT START ==="
-          cat review.txt || true
-          echo "=== REVIEW CONTENT END ==="
-
-      - name: Post review comment to PR
-        run: |
-          if [ ! -s review.txt ]; then
-            echo "No review content. Skipping comment."
-            exit 0
-          fi
           PR_NUMBER=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
-          COMMENT=$(cat review.txt | jq -r '.review // .')
-          # Escape for JSON
-          COMMENT_ESCAPED=$(echo "$COMMENT" | jq -Rs .)
-          echo "Posting review comment to PR #$PR_NUMBER"
+
+          COMMENTS=$(cat review.json | jq -c .)
+          if [ "$COMMENTS" = "[]" ] || [ -z "$COMMENTS" ]; then
+            echo "No inline comments to post."
+            exit 0
+          fi
+
+          # GitHub Review API
           curl -s -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"body\": $COMMENT_ESCAPED}" \
-            https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments
+            -d "{
+              \"body\": \"Automated review by LLM\",
+              \"event\": \"COMMENT\",
+              \"comments\": $COMMENTS
+            }" \
+            https://api.github.com/repos/$REPO/pulls/$PR_NUMBER/reviews
