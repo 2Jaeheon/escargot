@@ -41,14 +41,15 @@ jobs:
           
       - name: Post comment
         uses: actions/github-script@v6
+        env:
+          REVIEW_COMMENT: "${{ steps.review.outputs.result }}"
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const body = `${{ steps.review.outputs.result }}`;
+            const body = process.env.REVIEW_COMMENT;
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-
               body: body
             });
