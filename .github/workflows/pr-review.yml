@@ -33,10 +33,17 @@ jobs:
       - name: Send diff to local review bot (Ollama) safely
         id: ollama
         run: |
-          echo "Sending diff to Ollama server at ${{ secrets.LOCAL_REVIEW_URL }}"
+          # URL이 루트로 끝나면 /review 엔드포인트 추가
+          BASE_URL="${{ secrets.LOCAL_REVIEW_URL }}"
+          if [[ "$BASE_URL" == */ ]]; then
+            REVIEW_URL="${BASE_URL}review"
+          else
+            REVIEW_URL="${BASE_URL}/review"
+          fi
+          echo "Sending diff to Ollama server at $REVIEW_URL"
           # Safely encode diff as JSON using jq -Rs
           REVIEW=$(jq -Rs '{diff: .}' pr.diff | \
-            curl -s ${{ secrets.LOCAL_REVIEW_URL }} \
+            curl -s "$REVIEW_URL" \
               -H "Content-Type: application/json" \
               -d @-)
           echo "$REVIEW" > review.txt
