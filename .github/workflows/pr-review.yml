@@ -33,10 +33,9 @@ jobs:
       - name: Send diff to local review bot (Ollama) safely
         id: ollama
         run: |
-          echo "Sending diff to Ollama server at ${{ secrets.LOCAL_REVIEW_URL }}"
-          # Safely encode diff as JSON using jq -Rs
+          echo "Sending diff to Ollama server at ${{ secrets.LOCAL_REVIEW_URL }}/review"
           REVIEW=$(jq -Rs '{diff: .}' pr.diff | \
-            curl -s ${{ secrets.LOCAL_REVIEW_URL }} \
+            curl -s "${{ secrets.LOCAL_REVIEW_URL }}/review" \
               -H "Content-Type: application/json" \
               -d @-)
           echo "$REVIEW" > review.txt
