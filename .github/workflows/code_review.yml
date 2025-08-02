@@ -16,7 +16,7 @@ jobs:
         id: diff
         run: |
           git fetch origin ${{ github.base_ref }}
-          DIFF=$(git diff origin/${{ github.base_ref }} HEAD)
+          DIFF=$(git diff --unified=20 origin/${{ github.base_ref }} HEAD)
           echo "diff<<EOF" >> $GITHUB_OUTPUT
           echo "$DIFF" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
