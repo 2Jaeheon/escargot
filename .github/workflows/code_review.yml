@@ -37,6 +37,7 @@ jobs:
               body: JSON.stringify({ diff })
             });
             const { comments } = await response.json();
+            console.log('Comments from API:', comments);
             return JSON.stringify(comments);
           
       - name: Create review with inline comments

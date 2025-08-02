@@ -49,12 +49,21 @@ async def review_diff(request: DiffRequest):
             ],
         )
         
+        raw = response["message"]["content"].strip()
+        print("=== LLM raw response ===")
+        print(raw[:2000])  # truncate to avoid huge logs
+
         try:
-            comments = json.loads(response["message"]["content"].strip())
-        except json.JSONDecodeError as err:
-            # Fallback: return whole text as single general comment
-            comments = [{"path": "_general", "line": 1, "side": "RIGHT", "body": response["message"]["content"]}]
-        
+            comments = json.loads(raw)
+        except json.JSONDecodeError:
+            print("JSON decode failed; sending fallback general comment")
+            comments = [{"path": "_general", "line": 1, "side": "RIGHT", "body": raw}]
+
+        if not comments:
+            print("LLM returned empty comments array; inserting placeholder")
+            comments = [{"path": "_general", "line": 1, "side": "RIGHT", "body": "LLM did not generate specific comments."}]
+
+        print("Parsed comments:", comments)
         return {"comments": comments}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
