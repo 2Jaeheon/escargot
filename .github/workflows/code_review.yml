@@ -34,22 +34,29 @@ jobs:
               headers: {
                 'Content-Type': 'application/json'
               },
-              body: JSON.stringify({ diff: diff })
+              body: JSON.stringify({ diff })
             });
-            const result = await response.json();
-            return result.review;
+            const { comments } = await response.json();
+            return JSON.stringify(comments);
           
-      - name: Post comment
+      - name: Create review with inline comments
         uses: actions/github-script@v6
         env:
-          REVIEW_COMMENT: "${{ steps.review.outputs.result }}"
+          INLINE_COMMENTS: "${{ steps.review.outputs.result }}"
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const body = process.env.REVIEW_COMMENT;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
+            const comments = JSON.parse(process.env.INLINE_COMMENTS || '[]');
+            if (comments.length === 0) {
+              console.log('No inline comments generated.');
+              return;
+            }
+            const commitId = context.payload.pull_request.head.sha;
+            await github.rest.pulls.createReview({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: body
+              pull_number: context.issue.number,
+              commit_id: commitId,
+              event: 'COMMENT',
+              comments
             });

@@ -1,7 +1,9 @@
+import json
+import os
+
 import ollama
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import os
 import uvicorn
 
 app = FastAPI()
@@ -16,17 +18,22 @@ async def review_diff(request: DiffRequest):
         
         prompt = f"""
         You are a senior software engineer performing a code review.
-        Please review the following code changes (git diff) and provide feedback.
-        Focus on identifying potential bugs, performance issues, and violations of best practices.
-        The output should be in Markdown format, suitable for a GitHub comment.
-        When you find a section of code to comment on, please use the git diff format to show the lines you are referring to.
-        For example:
-        ```diff
-        - old line of code
-        + new line of code
-        ```
-        
-        Here is the diff:
+        Examine the following git diff and provide inline review comments.
+
+        Output FORMAT (must be **valid JSON only**, no markdown, no explanation):
+        [
+          {{
+            "path": "relative/file/path.cpp",  // file path in repository
+            "line": 42,                          // line number in the NEW (right) side
+            "side": "RIGHT",                   // always "RIGHT"
+            "body": "Explain what should be improved and why."
+          }},
+          ... (one object per comment)
+        ]
+
+        Only output the JSON array. Do NOT wrap it in markdown.
+
+        Git diff to review:
         ```diff
         {request.diff}
         ```
@@ -42,7 +49,13 @@ async def review_diff(request: DiffRequest):
             ],
         )
         
-        return {"review": response["message"]["content"]}
+        try:
+            comments = json.loads(response["message"]["content"].strip())
+        except json.JSONDecodeError as err:
+            # Fallback: return whole text as single general comment
+            comments = [{"path": "_general", "line": 1, "side": "RIGHT", "body": response["message"]["content"]}]
+        
+        return {"comments": comments}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
