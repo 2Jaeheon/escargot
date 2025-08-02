@@ -39,14 +39,28 @@ jobs:
           cat review.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Debug review content
+        run: |
+          echo "=== REVIEW CONTENT START ==="
+          cat review.txt || true
+          echo "=== REVIEW CONTENT END ==="
+
       - name: Post review comment to PR
         run: |
+          if [ ! -s review.txt ]; then
+            echo "No review content. Skipping comment."
+            exit 0
+          fi
+
           PR_NUMBER=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
-          COMMENT=$(cat review.txt | jq -Rs .)
+
+          # Base64 encode review content to ensure JSON safety
+          COMMENT_B64=$(base64 -w 0 review.txt)
+
           echo "Posting review comment to PR #$PR_NUMBER"
           curl -s -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"body\": $COMMENT}" \
+            -d "{\"body\": \"$(echo $COMMENT_B64 | base64 --decode)\"}" \
             https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments
