@@ -16,7 +16,8 @@ jobs:
         id: diff
         run: |
           git fetch origin ${{ github.base_ref }}
-          DIFF=$(git diff origin/${{ github.base_ref }} HEAD)
+          # -U0 옵션으로 변경된 줄만 포함하여 LLM 의 라인 계산을 단순화
+          DIFF=$(git diff -U0 origin/${{ github.base_ref }} HEAD)
           echo "diff<<EOF" >> $GITHUB_OUTPUT
           echo "$DIFF" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT

@@ -18,22 +18,31 @@ async def review_diff(request: DiffRequest):
         
         prompt = f"""
         You are a senior software engineer performing a code review.
-        Examine the following git diff and provide inline review comments.
+        Examine the following git diff (-U0) and provide inline review comments.
 
-        Output FORMAT (must be **valid JSON only**, no markdown, no explanation):
+        OUTPUT FORMAT (valid JSON ONLY, no markdown, no prose):
         [
           {{
-            "path": "relative/file/path.cpp",  // file path in repository
-            "line": 42,                          // line number in the NEW (right) side
-            "side": "RIGHT",                   // always "RIGHT"
-            "body": "Explain what should be improved and why."
+            "path": "relative/path/to/file.cpp",
+            "side": "RIGHT",
+            "line": 42,
+            "body": "Why & how to improve"
           }},
-          ... (one object per comment)
+          {{
+            "path": "relative/path/to/file.cpp",
+            "side": "RIGHT",
+            "start_line": 10,
+            "line": 15,
+            "body": "Why & how to improve (multi-line)"
+          }}
         ]
 
-        Only output the JSON array. Do NOT wrap it in markdown.
+        Rules:
+        1. Use line numbers of the NEW file (right side).
+        2. For multi-line comments include both start_line and line.
+        3. Do NOT output markdown or explanations, only the JSON array.
 
-        Git diff to review:
+        Git diff (-U0):
         ```diff
         {request.diff}
         ```
