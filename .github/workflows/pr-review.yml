@@ -6,6 +6,7 @@ on:
 
 jobs:
   review:
+    # fork에서만 동작
     if: github.repository == '2Jaeheon/escargot'
     runs-on: ubuntu-latest
 
@@ -32,9 +33,10 @@ jobs:
       - name: Send diff to local review bot (Ollama) safely
         id: ollama
         run: |
-          echo "Sending diff to Ollama server at ${{ secrets.LOCAL_REVIEW_URL }}/review"
+          echo "Sending diff to Ollama server at ${{ secrets.LOCAL_REVIEW_URL }}"
+          # Safely encode diff as JSON using jq -Rs
           REVIEW=$(jq -Rs '{diff: .}' pr.diff | \
-            curl -s "${{ secrets.LOCAL_REVIEW_URL }}/review" \
+            curl -s ${{ secrets.LOCAL_REVIEW_URL }} \
               -H "Content-Type: application/json" \
               -d @-)
           echo "$REVIEW" > review.txt
@@ -57,6 +59,7 @@ jobs:
           PR_NUMBER=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
           COMMENT=$(cat review.txt | jq -r '.review // .')
+          # Escape for JSON
           COMMENT_ESCAPED=$(echo "$COMMENT" | jq -Rs .)
           echo "Posting review comment to PR #$PR_NUMBER"
           curl -s -X POST \
