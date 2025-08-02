@@ -6,13 +6,18 @@ on:
 
 jobs:
   review:
-    # fork에서만 동작 (원본 Samsung/escargot에서는 안 돌도록)
+    # fork에서만 동작
     if: github.repository == '2Jaeheon/escargot'
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
 
       - name: Get PR diff
         id: diff
@@ -24,16 +29,16 @@ jobs:
                -H "Accept: application/vnd.github.v3.diff" \
                https://api.github.com/repos/$REPO/pulls/$PR_NUMBER > pr.diff
           echo "Diff saved to pr.diff"
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-      - name: Send diff to local review bot (Ollama)
+
+      - name: Send diff to local review bot (Ollama) safely
         id: ollama
         run: |
           echo "Sending diff to Ollama server at ${{ secrets.LOCAL_REVIEW_URL }}"
-          REVIEW=$(curl -s ${{ secrets.LOCAL_REVIEW_URL }} \
-            -H "Content-Type: application/json" \
-            -d "{\"diff\": \"$(cat pr.diff | sed 's/\"/\\\"/g')\"}")
-          # Save review for later steps
+          # Safely encode diff as JSON using jq -Rs
+          REVIEW=$(jq -Rs '{diff: .}' pr.diff | \
+            curl -s ${{ secrets.LOCAL_REVIEW_URL }} \
+              -H "Content-Type: application/json" \
+              -d @-)
           echo "$REVIEW" > review.txt
           echo "review<<EOF" >> $GITHUB_OUTPUT
           cat review.txt >> $GITHUB_OUTPUT
@@ -45,28 +50,20 @@ jobs:
           cat review.txt || true
           echo "=== REVIEW CONTENT END ==="
 
-      - name: Debug review content
-        run: |
-          echo "=== REVIEW CONTENT START ==="
-          cat review.txt || true
-          echo
-          echo "=== REVIEW CONTENT END ==="
       - name: Post review comment to PR
         run: |
           if [ ! -s review.txt ]; then
             echo "No review content. Skipping comment."
             exit 0
           fi
-
           PR_NUMBER=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
-
-          # Base64 encode review content to ensure JSON safety
-          COMMENT_B64=$(base64 -w 0 review.txt)
-
+          COMMENT=$(cat review.txt | jq -r '.review // .')
+          # Escape for JSON
+          COMMENT_ESCAPED=$(echo "$COMMENT" | jq -Rs .)
           echo "Posting review comment to PR #$PR_NUMBER"
           curl -s -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"body\": \"$(echo $COMMENT_B64 | base64 --decode)\"}" \
+            -d "{\"body\": $COMMENT_ESCAPED}" \
             https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments
