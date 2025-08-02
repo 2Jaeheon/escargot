@@ -31,13 +31,21 @@ jobs:
 
       - name: Send diff to review bot
         run: |
+          # Send PR diff to review server and expect an array of {path, position, body}
           REVIEW=$(jq -Rs '{diff: .}' pr.diff | \
             curl -s "${{ secrets.LOCAL_REVIEW_URL }}/review" \
               -H "Content-Type: application/json" \
               -d @-)
+          
           echo "$REVIEW" > review.json
-          echo "=== REVIEW JSON ==="
+          echo "=== REVIEW JSON (Expected array of inline comments) ==="
           cat review.json
+
+          # Validate that the output is a JSON array
+          if ! cat review.json | jq -e 'type == "array"' > /dev/null; then
+            echo "Review server did not return a JSON array. Skipping inline comment posting."
+            exit 0
+          fi
 
       - name: Post inline review comments
         run: |
@@ -50,6 +58,7 @@ jobs:
             exit 0
           fi
 
+          # Post inline review comments to the PR
           curl -s -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/json" \
