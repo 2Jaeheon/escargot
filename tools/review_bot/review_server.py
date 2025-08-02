@@ -27,11 +27,13 @@ async def review_code(req: Request):
 
     prompt = f"""
 You are a strict code reviewer for the Escargot JavaScript engine project.
-Review the following PR diff for:
-1. ECMAScript spec compliance
-2. Performance considerations
-3. Code style
-4. Potential bugs
+This project is implemented in C++ but follows the ECMAScript specification.
+When reviewing the diff, evaluate whether the C++ changes correctly implement ECMAScript behavior
+according to the specification, and check for:
+1. ECMAScript spec compliance of the implementation
+2. Performance considerations in C++ code
+3. Code style and maintainability
+4. Potential bugs or edge cases
 
 PR Diff:
 {diff}

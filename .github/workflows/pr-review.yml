@@ -29,7 +29,11 @@ jobs:
                -H "Accept: application/vnd.github.v3.diff" \
                https://api.github.com/repos/$REPO/pulls/$PR_NUMBER > pr.diff
           echo "Diff saved to pr.diff"
-
+      - name: Debug PR diff
+        run: |
+          echo "===== BEGIN DIFF ====="
+          cat pr.diff
+          echo "===== END DIFF ====="
       - name: Send diff to local review bot (Ollama) safely
         id: ollama
         run: |
