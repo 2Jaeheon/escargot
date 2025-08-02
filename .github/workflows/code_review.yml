@@ -29,15 +29,17 @@ jobs:
         with:
           script: |
             const diff = process.env.GIT_DIFF;
-            const response = await fetch('https://companion-away-works-wellington.trycloudflare.com/review', {
+            const response = await fetch('https://solving-substantially-valued-anymore.trycloudflare.com/review', {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json'
               },
               body: JSON.stringify({ diff })
             });
-            const { comments } = await response.json();
-            console.log('Comments from API:', comments);
+            const data = await response.json();
+            console.log('API raw:', data);
+            const comments = data.comments || [];
+            console.log('Comments array:', comments);
             return JSON.stringify(comments);
           
       - name: Create review with inline comments
