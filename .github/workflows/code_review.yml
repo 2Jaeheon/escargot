@@ -49,8 +49,21 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const comments = JSON.parse(process.env.INLINE_COMMENTS || '[]');
-            if (comments.length === 0) {
+            let raw = process.env.INLINE_COMMENTS || '[]';
+            console.log('INLINE_COMMENTS raw:', raw);
+            let comments;
+            try {
+              comments = JSON.parse(raw);
+              // sometimes one level of quotes 더 있을 수 있음
+              if (typeof comments === 'string') {
+                comments = JSON.parse(comments);
+              }
+            } catch (e) {
+              console.log('JSON parse error:', e);
+              comments = [];
+            }
+            console.log('Parsed comments array:', comments);
+            if (!Array.isArray(comments) || comments.length === 0) {
               console.log('No inline comments generated.');
               return;
             }
