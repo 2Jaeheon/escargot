@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+import os
+import requests
+from fastapi import FastAPI, Request
+import uvicorn
+
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+MODEL = os.getenv("OLLAMA_MODEL", "llama3")
+
+app = FastAPI()
+
+@app.post("/review")
+async def review_code(req: Request):
+    data = await req.json()
+    diff = data.get("diff", "")
+
+    prompt = f"""
+You are a strict code reviewer for the Escargot JavaScript engine project.
+Review the following PR diff for:
+1. ECMAScript spec compliance
+2. Performance considerations
+3. Code style
+4. Potential bugs
+
+PR Diff:
+{diff}
+"""
+
+    ollama_resp = requests.post(
+        OLLAMA_URL,
+        json={"model": MODEL, "prompt": prompt, "stream": False}
+    )
+
+    review_text = ollama_resp.json().get("response", "").strip()
+    return {"review": review_text}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=3000)
