@@ -752,111 +752,106 @@ static Value builtinIteratorToArray(ExecutionState& state, Value thisValue, size
 
 static std::pair<Value, bool> iteratorFlatMapClosure(ExecutionState& state, IteratorHelperObject* obj, void* data)
 {
-    //    Let closure be a new Abstract Closure with no parameters that captures iterated and mapper and performs the following steps when called:
-    //    a. Let counter be 0.
-    //    b. Repeat,
-    //       i. Let value be ? IteratorStepValue(iterated).
-    //       ii. If value is done, return ReturnCompletion(undefined).
-    //       iii. Let mapped be Completion(Call(mapper, undefined, « value, 𝔽(counter) »)).
-    //       iv. IfAbruptCloseIterator(mapped, iterated).
-    //       v. Let innerIterator be Completion(GetIteratorFlattenable(mapped, reject-primitives)).
-    //       vi. IfAbruptCloseIterator(innerIterator, iterated).
-    //       vii. Let innerAlive be true.
-    //       viii. Repeat, while innerAlive is true,
-    //             1. Let innerValue be Completion(IteratorStepValue(innerIterator)).
-    //             2. IfAbruptCloseIterator(innerValue, iterated).
-    //             3. If innerValue is done, then
-    //                a. Set innerAlive to false.
-    //             4. Else,
-    //                a. Let completion be Completion(Yield(innerValue)).
-    //                b. If completion is an abrupt completion, then
-    //                   i. Let backupCompletion be Completion(IteratorClose(innerIterator, completion)).
-    //                   ii. IfAbruptCloseIterator(backupCompletion, iterated).
-    //                   iii. Return ? IteratorClose(iterated, completion).
-    //       ix. Set counter to counter + 1.
     IteratorRecord* iterated = obj->underlyingIterator();
     FlatMapIteratorData* closureData = reinterpret_cast<FlatMapIteratorData*>(data);
     Value mapper = closureData->callback;
 
     while (true) {
-        // while innerAlive is true, Let innerValue be Completion(IteratorStepValue(innerIterator)).
+        // 현재 활성화된 내부 이터레이터가 있으면 먼저 처리
         if (closureData->innerAlive && closureData->innerIterator) {
-            Optional<Value> innerValue;
-            try {
-                innerValue = IteratorObject::iteratorStepValue(state, closureData->innerIterator);
-            } catch (const Value& e) {
-                // IfAbruptCloseIterator(innerValue, iterated).
-                IteratorObject::iteratorClose(state, obj->underlyingIterator(), e, true);
-            }
-            if (!innerValue) {
-                // If innerValue is done, then Set innerAlive to false.
-                closureData->innerAlive = false;
-                closureData->innerIterator = nullptr;
-            } else {
-                // Else, Let completion be Completion(Yield(innerValue)).
+            Optional<Value> innerValue = processInnerIterator(state, closureData, iterated);
+            if (innerValue) {
                 return std::make_pair(innerValue.value(), false);
             }
         }
 
-        // Let value be ? IteratorStepValue(iterated).
+        // 외부 이터레이터에서 다음 값 가져오기
         auto value = IteratorObject::iteratorStepValue(state, iterated);
-        // If value is done, return ReturnCompletion(undefined).
         if (!value) {
             iterated->m_done = true;
             return std::make_pair(Value(), true);
         }
 
-        // Let mapped be Completion(Call(mapper, undefined, « value, 𝔽(counter) »)).
-        Value args[2] = { value.value(), Value(closureData->counter) };
-        Value mapped;
+        // 매퍼 함수를 호출하여 새로운 이터러블 생성
+        Value mapped = callMapper(state, mapper, value.value(), closureData->counter, iterated);
 
-        try {
-            mapped = Object::call(state, mapper, Value(), 2, args);
-        } catch (const Value& e) {
-            // IfAbruptCloseIterator(mapped, iterated).
-            IteratorObject::iteratorClose(state, iterated, e, true);
-        }
+        // 새로운 내부 이터레이터 생성
+        IteratorRecord* innerIterator = createInnerIterator(state, mapped, iterated);
 
-        // Let innerIterator be Completion(GetIteratorFlattenable(mapped, reject-primitives)).
-        IteratorRecord* innerIterator = nullptr;
-        try {
-            innerIterator = IteratorObject::getIteratorFlattenable(state, mapped, IteratorObject::PrimitiveHandling::RejectPrimitives);
-        } catch (const Value& e) {
-            IteratorObject::iteratorClose(state, iterated, e, true);
-        }
-
-        // Let innerAlive be true.
-        // Set counter to counter + 1.
+        // 내부 이터레이터 상태 초기화 및 카운터 증가
         closureData->innerAlive = true;
         closureData->innerIterator = innerIterator;
         closureData->counter = StorePositiveNumberAsOddNumber(closureData->counter + 1);
     }
 }
 
+// 내부 이터레이터 처리 헬퍼 함수
+static Optional<Value> processInnerIterator(ExecutionState& state, FlatMapIteratorData* closureData, IteratorRecord* iterated)
+{
+    Optional<Value> innerValue;
+    try {
+        innerValue = IteratorObject::iteratorStepValue(state, closureData->innerIterator);
+    } catch (const Value& e) {
+        IteratorObject::iteratorClose(state, iterated, e, true);
+    }
+
+    if (!innerValue) {
+        // 내부 이터레이터가 완료되면 상태 초기화
+        closureData->innerAlive = false;
+        closureData->innerIterator = nullptr;
+        return Optional<Value>();
+    }
+
+    return innerValue;
+}
+
+// 매퍼 함수 호출 헬퍼 함수
+static Value callMapper(ExecutionState& state, Value mapper, Value value, StorePositiveNumberAsOddNumber counter, IteratorRecord* iterated)
+{
+    Value args[2] = { value, Value(counter) };
+    Value mapped;
+
+    try {
+        mapped = Object::call(state, mapper, Value(), 2, args);
+    } catch (const Value& e) {
+        IteratorObject::iteratorClose(state, iterated, e, true);
+    }
+
+    return mapped;
+}
+
+// 내부 이터레이터 생성 헬퍼 함수
+static IteratorRecord* createInnerIterator(ExecutionState& state, Value mapped, IteratorRecord* iterated)
+{
+    IteratorRecord* innerIterator = nullptr;
+
+    try {
+        innerIterator = IteratorObject::getIteratorFlattenable(state, mapped, IteratorObject::PrimitiveHandling::RejectPrimitives);
+    } catch (const Value& e) {
+        IteratorObject::iteratorClose(state, iterated, e, true);
+    }
+
+    return innerIterator;
+}
+
 static Value builtinIteratorFlatMap(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    // Let O be the this value.
+    // this 값 검증
     const Value& O = thisValue;
-
-    // If O is not an Object, throw a TypeError exception.
     if (!O.isObject()) {
         ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "this value is not Object");
     }
 
-    // If IsCallable(mapper) is false, throw a TypeError exception.
+    // 매퍼 함수 검증
     const Value& mapper = argv[0];
     if (!mapper.isCallable()) {
         ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "mapper is not callable");
     }
 
-    // Set iterated to ? GetIteratorDirect(O).
+    // 이터레이터 생성 및 반환
     IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O.asObject());
-
-    // Let result be CreateIteratorFromClosure(closure, "Iterator Helper", %IteratorHelperPrototype%, « [[UnderlyingIterator]] »).
-    // Set result.[[UnderlyingIterator]] to iterated.
     IteratorHelperObject* result = new IteratorHelperObject(state, iteratorFlatMapClosure, iterated, new FlatMapIteratorData(mapper));
 
-    // Return result.
     return result;
 }
 
