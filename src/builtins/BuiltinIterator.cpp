@@ -750,86 +750,70 @@ static Value builtinIteratorToArray(ExecutionState& state, Value thisValue, size
     }
 }
 
+// Helper: advance inner iterator and return next value if available.
+static Optional<Value> advanceInnerIterator(ExecutionState& state, FlatMapIteratorData* data, IteratorRecord* outerIter)
+{
+    if (!data->innerAlive || !data->innerIterator)
+        return Optional<Value>();
+
+    Optional<Value> innerValue;
+    try {
+        innerValue = IteratorObject::iteratorStepValue(state, data->innerIterator);
+    } catch (const Value& e) {
+        IteratorObject::iteratorClose(state, outerIter, e, true);
+    }
+
+    if (innerValue) {
+        return innerValue;
+    }
+
+    // inner iterator exhausted
+    data->innerAlive = false;
+    data->innerIterator = nullptr;
+    return Optional<Value>();
+}
+
 static std::pair<Value, bool> iteratorFlatMapClosure(ExecutionState& state, IteratorHelperObject* obj, void* data)
 {
-    //    Let closure be a new Abstract Closure with no parameters that captures iterated and mapper and performs the following steps when called:
-    //    a. Let counter be 0.
-    //    b. Repeat,
-    //       i. Let value be ? IteratorStepValue(iterated).
-    //       ii. If value is done, return ReturnCompletion(undefined).
-    //       iii. Let mapped be Completion(Call(mapper, undefined, « value, 𝔽(counter) »)).
-    //       iv. IfAbruptCloseIterator(mapped, iterated).
-    //       v. Let innerIterator be Completion(GetIteratorFlattenable(mapped, reject-primitives)).
-    //       vi. IfAbruptCloseIterator(innerIterator, iterated).
-    //       vii. Let innerAlive be true.
-    //       viii. Repeat, while innerAlive is true,
-    //             1. Let innerValue be Completion(IteratorStepValue(innerIterator)).
-    //             2. IfAbruptCloseIterator(innerValue, iterated).
-    //             3. If innerValue is done, then
-    //                a. Set innerAlive to false.
-    //             4. Else,
-    //                a. Let completion be Completion(Yield(innerValue)).
-    //                b. If completion is an abrupt completion, then
-    //                   i. Let backupCompletion be Completion(IteratorClose(innerIterator, completion)).
-    //                   ii. IfAbruptCloseIterator(backupCompletion, iterated).
-    //                   iii. Return ? IteratorClose(iterated, completion).
-    //       ix. Set counter to counter + 1.
-    IteratorRecord* iterated = obj->underlyingIterator();
-    FlatMapIteratorData* closureData = reinterpret_cast<FlatMapIteratorData*>(data);
-    Value mapper = closureData->callback;
+    // FlatMap core loop: produce values from current inner iterator; if exhausted, map next outer value.
+    IteratorRecord* outerIter = obj->underlyingIterator();
+    auto* flatData = reinterpret_cast<FlatMapIteratorData*>(data);
+    Value mapper = flatData->callback;
 
     while (true) {
-        // while innerAlive is true, Let innerValue be Completion(IteratorStepValue(innerIterator)).
-        if (closureData->innerAlive && closureData->innerIterator) {
-            Optional<Value> innerValue;
-            try {
-                innerValue = IteratorObject::iteratorStepValue(state, closureData->innerIterator);
-            } catch (const Value& e) {
-                // IfAbruptCloseIterator(innerValue, iterated).
-                IteratorObject::iteratorClose(state, obj->underlyingIterator(), e, true);
-            }
-            if (!innerValue) {
-                // If innerValue is done, then Set innerAlive to false.
-                closureData->innerAlive = false;
-                closureData->innerIterator = nullptr;
-            } else {
-                // Else, Let completion be Completion(Yield(innerValue)).
-                return std::make_pair(innerValue.value(), false);
-            }
+        // 1. Try to yield from active inner iterator first.
+        if (auto innerValue = advanceInnerIterator(state, flatData, outerIter)) {
+            return { innerValue.value(), false };
         }
 
-        // Let value be ? IteratorStepValue(iterated).
-        auto value = IteratorObject::iteratorStepValue(state, iterated);
-        // If value is done, return ReturnCompletion(undefined).
-        if (!value) {
-            iterated->m_done = true;
-            return std::make_pair(Value(), true);
+        // 2. Fetch next value from outer iterator.
+        Optional<Value> outerValue = IteratorObject::iteratorStepValue(state, outerIter);
+        if (!outerValue) {
+            outerIter->m_done = true;
+            return { Value(), true }; // done
         }
 
-        // Let mapped be Completion(Call(mapper, undefined, « value, 𝔽(counter) »)).
-        Value args[2] = { value.value(), Value(closureData->counter) };
+        // 3. Call mapper(value, counter)
+        Value args[2] = { outerValue.value(), Value(flatData->counter) };
         Value mapped;
-
         try {
             mapped = Object::call(state, mapper, Value(), 2, args);
         } catch (const Value& e) {
-            // IfAbruptCloseIterator(mapped, iterated).
-            IteratorObject::iteratorClose(state, iterated, e, true);
+            IteratorObject::iteratorClose(state, outerIter, e, true);
         }
 
-        // Let innerIterator be Completion(GetIteratorFlattenable(mapped, reject-primitives)).
-        IteratorRecord* innerIterator = nullptr;
+        // 4. Get iterator from mapped result.
+        IteratorRecord* innerIter = nullptr;
         try {
-            innerIterator = IteratorObject::getIteratorFlattenable(state, mapped, IteratorObject::PrimitiveHandling::RejectPrimitives);
+            innerIter = IteratorObject::getIteratorFlattenable(state, mapped, IteratorObject::PrimitiveHandling::RejectPrimitives);
         } catch (const Value& e) {
-            IteratorObject::iteratorClose(state, iterated, e, true);
+            IteratorObject::iteratorClose(state, outerIter, e, true);
         }
 
-        // Let innerAlive be true.
-        // Set counter to counter + 1.
-        closureData->innerAlive = true;
-        closureData->innerIterator = innerIterator;
-        closureData->counter = StorePositiveNumberAsOddNumber(closureData->counter + 1);
+        flatData->innerIterator = innerIter;
+        flatData->innerAlive = true;
+        flatData->counter = StorePositiveNumberAsOddNumber(flatData->counter + 1);
+        // loop continues -> will attempt to yield from new inner iterator at top
     }
 }
 
