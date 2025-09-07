@@ -29,6 +29,61 @@
 
 namespace Escargot {
 
+namespace {
+
+static inline const StaticStrings& staticStrings(ExecutionState& state)
+{
+    return state.context()->staticStrings();
+}
+
+static inline Value callFunction(ExecutionState& state, const Value& fn, const Value& thisVal)
+{
+    return Object::call(state, fn, thisVal, 0, nullptr);
+}
+
+static inline Value callFunction1(ExecutionState& state, const Value& fn, const Value& thisVal, const Value& arg0)
+{
+    Value args[] = { arg0 };
+    return Object::call(state, fn, thisVal, 1, args);
+}
+
+static inline Value getPropertyValue(ExecutionState& state, Object* obj, const String* name)
+{
+    return obj->get(state, ObjectPropertyName(name)).value(state, obj);
+}
+
+static inline void ensureObjectOrTypeError(ExecutionState& state, const Value& v, const char* message)
+{
+    if (!v.isObject()) {
+        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, message);
+    }
+}
+
+static inline void defineIterResultProps(ExecutionState& state, Object* obj, const Value& value, bool done)
+{
+    const StaticStrings& strings = staticStrings(state);
+    obj->defineOwnProperty(state, ObjectPropertyName(strings.value), ObjectPropertyDescriptor(value, ObjectPropertyDescriptor::AllPresent));
+    obj->defineOwnProperty(state, ObjectPropertyName(strings.done), ObjectPropertyDescriptor(Value(done), ObjectPropertyDescriptor::AllPresent));
+}
+
+static inline std::pair<Value, bool> tryCallNoArgs(ExecutionState& state, const Value& fn, const Value& thisVal)
+{
+    try {
+        return { Object::call(state, fn, thisVal, 0, nullptr), false };
+    } catch (const Value& e) {
+        return { e, true };
+    }
+}
+
+static constexpr int64_t kMaxSafeInteger = (1LL << 53LL) - 1LL;
+
+static inline Optional<Value> stepAndGetValue(ExecutionState& state, IteratorRecord* iteratorRecord)
+{
+    return IteratorObject::iteratorStepValue(state, iteratorRecord);
+}
+
+} // anonymous namespace
+
 IteratorObject::IteratorObject(ExecutionState& state)
     : IteratorObject(state, state.context()->globalObject()->objectPrototype())
 {
@@ -43,16 +98,14 @@ Value IteratorObject::next(ExecutionState& state)
 {
     auto result = advance(state);
     Object* r = new Object(state);
-
-    r->defineOwnProperty(state, ObjectPropertyName(state.context()->staticStrings().value), ObjectPropertyDescriptor(result.first, ObjectPropertyDescriptor::AllPresent));
-    r->defineOwnProperty(state, ObjectPropertyName(state.context()->staticStrings().done), ObjectPropertyDescriptor(Value(result.second), ObjectPropertyDescriptor::AllPresent));
+    defineIterResultProps(state, r, result.first, result.second);
     return r;
 }
 
 // https://www.ecma-international.org/ecma-262/10.0/#sec-getiterator
 IteratorRecord* IteratorObject::getIterator(ExecutionState& state, const Value& obj, const bool sync, const Value& func)
 {
-    const StaticStrings* strings = &state.context()->staticStrings();
+    const StaticStrings& strings = staticStrings(state);
     Value method = func;
     // If method is not present, then
     if (method.isEmpty()) {
@@ -76,15 +129,13 @@ IteratorRecord* IteratorObject::getIterator(ExecutionState& state, const Value& 
     }
 
     // Let iterator be ? Call(method, obj).
-    Value iterator = Object::call(state, method, obj, 0, nullptr);
+    Value iterator = callFunction(state, method, obj);
 
     // If Type(iterator) is not Object, throw a TypeError exception.
-    if (!iterator.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "result of GetIterator is not an object");
-    }
+    ensureObjectOrTypeError(state, iterator, "result of GetIterator is not an object");
 
     // Let nextMethod be ? GetV(iterator, "next").
-    Value nextMethod = iterator.asObject()->get(state, ObjectPropertyName(strings->next)).value(state, iterator);
+    Value nextMethod = getPropertyValue(state, iterator.asObject(), strings.next);
 
     // Let iteratorRecord be Record { [[Iterator]]: iterator, [[NextMethod]]: nextMethod, [[Done]]: false }.
     // Return iteratorRecord
@@ -94,22 +145,17 @@ IteratorRecord* IteratorObject::getIterator(ExecutionState& state, const Value& 
 // https://www.ecma-international.org/ecma-262/10.0/#sec-iteratornext
 Object* IteratorObject::iteratorNext(ExecutionState& state, IteratorRecord* iteratorRecord, const Value& value)
 {
-    auto strings = &state.context()->staticStrings();
-
     IteratorRecord* record = iteratorRecord;
     Value result;
     Value nextMethod = record->m_nextMethod;
     Value iterator = record->m_iterator;
     if (value.isEmpty()) {
-        result = Object::call(state, nextMethod, iterator, 0, nullptr);
+        result = callFunction(state, nextMethod, iterator);
     } else {
-        Value args[] = { value };
-        result = Object::call(state, nextMethod, iterator, 1, args);
+        result = callFunction1(state, nextMethod, iterator, value);
     }
 
-    if (!result.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "result is not an object");
-    }
+    ensureObjectOrTypeError(state, result, "result is not an object");
 
     return result.asObject();
 }
@@ -117,14 +163,14 @@ Object* IteratorObject::iteratorNext(ExecutionState& state, IteratorRecord* iter
 // https://www.ecma-international.org/ecma-262/10.0/#sec-iteratorcomplete
 bool IteratorObject::iteratorComplete(ExecutionState& state, Object* iterResult)
 {
-    Value result = iterResult->get(state, ObjectPropertyName(state.context()->staticStrings().done)).value(state, iterResult);
+    Value result = getPropertyValue(state, iterResult, staticStrings(state).done);
     return result.toBoolean();
 }
 
 // https://www.ecma-international.org/ecma-262/10.0/#sec-iteratorvalue
 Value IteratorObject::iteratorValue(ExecutionState& state, Object* iterResult)
 {
-    return iterResult->get(state, ObjectPropertyName(state.context()->staticStrings().value)).value(state, iterResult);
+    return getPropertyValue(state, iterResult, staticStrings(state).value);
 }
 
 // https://www.ecma-international.org/ecma-262/10.0/#sec-iteratorstep
@@ -164,11 +210,11 @@ Optional<Value> IteratorObject::iteratorStepValue(ExecutionState& state, Iterato
 // https://www.ecma-international.org/ecma-262/10.0/#sec-iteratorclose
 Value IteratorObject::iteratorClose(ExecutionState& state, IteratorRecord* iteratorRecord, const Value& completionValue, bool hasThrowOnCompletionType)
 {
-    auto strings = &state.context()->staticStrings();
+    const StaticStrings& strings = staticStrings(state);
 
     IteratorRecord* record = iteratorRecord;
     Value iterator = record->m_iterator;
-    Value returnFunction = Object::getMethod(state, iterator, ObjectPropertyName(strings->stringReturn));
+    Value returnFunction = Object::getMethod(state, iterator, ObjectPropertyName(strings.stringReturn));
     if (returnFunction.isUndefined()) {
         if (hasThrowOnCompletionType) {
             state.throwException(completionValue);
@@ -177,14 +223,9 @@ Value IteratorObject::iteratorClose(ExecutionState& state, IteratorRecord* itera
     }
 
     // Let innerResult be Call(return, iterator, « »).
-    Value innerResult;
-    bool innerResultHasException = false;
-    try {
-        innerResult = Object::call(state, returnFunction, iterator, 0, nullptr);
-    } catch (const Value& e) {
-        innerResult = e;
-        innerResultHasException = true;
-    }
+    auto innerCall = tryCallNoArgs(state, returnFunction, iterator);
+    Value innerResult = innerCall.first;
+    bool innerResultHasException = innerCall.second;
     // If completion.[[type]] is throw, return Completion(completion).
     if (hasThrowOnCompletionType) {
         state.throwException(completionValue);
@@ -194,9 +235,7 @@ Value IteratorObject::iteratorClose(ExecutionState& state, IteratorRecord* itera
         state.throwException(innerResult);
     }
     // If Type(innerResult.[[value]]) is not Object, throw a TypeError exception.
-    if (!innerResult.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "Iterator close result is not an object");
-    }
+    ensureObjectOrTypeError(state, innerResult, "Iterator close result is not an object");
     // Return Completion(completion).
     return completionValue;
 }
@@ -205,8 +244,7 @@ Value IteratorObject::iteratorClose(ExecutionState& state, IteratorRecord* itera
 Object* IteratorObject::createIterResultObject(ExecutionState& state, const Value& value, bool done)
 {
     Object* obj = new Object(state);
-    obj->defineOwnProperty(state, ObjectPropertyName(state.context()->staticStrings().value), ObjectPropertyDescriptor(value, ObjectPropertyDescriptor::AllPresent));
-    obj->defineOwnProperty(state, ObjectPropertyName(state.context()->staticStrings().done), ObjectPropertyDescriptor(Value(done), ObjectPropertyDescriptor::AllPresent));
+    defineIterResultProps(state, obj, value, done);
 
     return obj;
 }
@@ -220,16 +258,12 @@ ValueVectorWithInlineStorage IteratorObject::iterableToList(ExecutionState& stat
         iteratorRecord = IteratorObject::getIterator(state, items, true);
     }
     ValueVectorWithInlineStorage values;
-    Optional<Object*> next;
-
     while (true) {
-        next = IteratorObject::iteratorStep(state, iteratorRecord);
-        if (next.hasValue()) {
-            Value nextValue = IteratorObject::iteratorValue(state, next.value());
-            values.pushBack(nextValue);
-        } else {
+        Optional<Value> maybeValue = stepAndGetValue(state, iteratorRecord);
+        if (!maybeValue) {
             break;
         }
+        values.pushBack(maybeValue.value());
     }
 
     return values;
@@ -240,14 +274,12 @@ ValueVector IteratorObject::iterableToListOfType(ExecutionState& state, const Va
 {
     IteratorRecord* iteratorRecord = IteratorObject::getIterator(state, items, true);
     ValueVector values;
-    Optional<Object*> next;
-
     while (true) {
-        next = IteratorObject::iteratorStep(state, iteratorRecord);
-        if (!next.hasValue()) {
+        Optional<Value> maybeValue = stepAndGetValue(state, iteratorRecord);
+        if (!maybeValue) {
             break;
         }
-        Value nextValue = IteratorObject::iteratorValue(state, next->asObject());
+        Value nextValue = maybeValue.value();
         if (!nextValue.isString()) {
             Value throwCompletion = ErrorObject::createError(state, ErrorCode::RangeError, new ASCIIStringFromExternalMemory("Got invalid value"));
             return { IteratorObject::iteratorClose(state, iteratorRecord, throwCompletion, true) };
@@ -301,7 +333,7 @@ IteratorObject::KeyedGroupVector IteratorObject::groupBy(ExecutionState& state, 
     // Repeat,
     while (true) {
         // a. If k ≥ 2**53 - 1, then
-        if (k >= ((1LL << 53LL) - 1LL)) {
+        if (k >= kMaxSafeInteger) {
             // Let error be ThrowCompletion(a newly created TypeError object).
             Value error = ErrorObject::createError(state, ErrorCode::TypeError, new ASCIIStringFromExternalMemory("Too many result on GroupBy function"));
             // Return ? IteratorClose(iteratorRecord, error).
@@ -310,7 +342,7 @@ IteratorObject::KeyedGroupVector IteratorObject::groupBy(ExecutionState& state, 
         }
 
         // Let next be ? IteratorStepValue(iteratorRecord).
-        Optional<Object*> next = IteratorObject::iteratorStep(state, iteratorRecord);
+        Optional<Value> next = stepAndGetValue(state, iteratorRecord);
         // If next is DONE, then
         if (!next) {
             // Return groups.
@@ -318,7 +350,7 @@ IteratorObject::KeyedGroupVector IteratorObject::groupBy(ExecutionState& state, 
         }
 
         // Let value be next.
-        Value value = IteratorObject::iteratorValue(state, next.value());
+        Value value = next.value();
         // Let key be Completion(Call(callbackfn, undefined, « value, 𝔽(k) »)).
         Value key;
         try {
@@ -356,7 +388,7 @@ IteratorObject::KeyedGroupVector IteratorObject::groupBy(ExecutionState& state, 
 IteratorRecord* IteratorObject::getIteratorDirect(ExecutionState& state, Object* obj)
 {
     // Let nextMethod be ? Get(obj, "next").
-    Value nextMethod = obj->get(state, ObjectPropertyName(state.context()->staticStrings().next)).value(state, obj);
+    Value nextMethod = getPropertyValue(state, obj, staticStrings(state).next);
     // Let iteratorRecord be Record { [[Iterator]]: obj, [[NextMethod]]: nextMethod, [[Done]]: false }.
     IteratorRecord* record = new IteratorRecord(obj, nextMethod, false);
     // Return iteratorRecord.
@@ -367,11 +399,9 @@ IteratorRecord* IteratorObject::getIteratorDirect(ExecutionState& state, Object*
 IteratorRecord* IteratorObject::getIteratorFromMethod(ExecutionState& state, const Value& obj, const Value& method)
 {
     // 1. Let iterator be ? Call(method, obj).
-    Value iterator = Object::call(state, method, obj, 0, nullptr);
+    Value iterator = callFunction(state, method, obj);
     // 2. If iterator is not an Object, throw a TypeError exception.
-    if (!iterator.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "iterator is not object");
-    }
+    ensureObjectOrTypeError(state, iterator, "iterator is not object");
     // 3. Return ? GetIteratorDirect(iterator).
     return getIteratorDirect(state, iterator.asObject());
 }
@@ -403,13 +433,11 @@ IteratorRecord* IteratorObject::getIteratorFlattenable(ExecutionState& state, co
         iterator = obj;
     } else {
         // Let iterator be ? Call(method, obj).
-        iterator = Object::call(state, method, obj, 0, nullptr);
+        iterator = callFunction(state, method, obj);
     }
 
     // If iterator is not an Object, throw a TypeError exception.
-    if (!iterator.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "GetIteratorFlattenable: iterator is not an object");
-    }
+    ensureObjectOrTypeError(state, iterator, "GetIteratorFlattenable: iterator is not an object");
 
     // Return ? GetIteratorDirect(iterator).
     return getIteratorDirect(state, iterator.asObject());
