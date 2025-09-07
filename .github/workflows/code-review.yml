@@ -60,7 +60,6 @@ jobs:
 
           curl -sS --fail-with-body --show-error \
             --connect-timeout 10 --max-time 3600 \
-            --retry 3 --retry-all-errors \
             -X POST "${REVIEW_SERVER}/review" \
             -H "Content-Type: application/json" \
             -d "{\"base_sha\":\"${BASE_SHA}\",\"head_sha\":\"${HEAD_SHA}\",\"pull_request_number\":${PR_NUMBER}}" \
