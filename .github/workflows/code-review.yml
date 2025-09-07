@@ -59,7 +59,7 @@ jobs:
           PR_NUMBER="${{ steps.shas.outputs.pr }}"
 
           curl -sS --fail-with-body --show-error \
-            --connect-timeout 10 --max-time 3600 \
+            --connect-timeout 10 --max-time 7200 \
             -X POST "${REVIEW_SERVER}/review" \
             -H "Content-Type: application/json" \
             -d "{\"base_sha\":\"${BASE_SHA}\",\"head_sha\":\"${HEAD_SHA}\",\"pull_request_number\":${PR_NUMBER}}" \
@@ -74,7 +74,6 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const core = require('@actions/core');
             const pr = context.payload.pull_request.number;
             let raw;
             try {
