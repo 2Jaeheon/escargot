@@ -868,23 +868,22 @@ static std::pair<Value, bool> iteratorFlatMapClosure(ExecutionState& state, Iter
     Value mapper = closureData->callback;
 
     while (true) {
-        // while innerAlive is true, Let innerValue be Completion(IteratorStepValue(innerIterator)).
+        // Fast path: yield from active inner iterator first
         if (closureData->innerAlive && closureData->innerIterator) {
             Optional<Value> innerValue;
             try {
                 innerValue = IteratorObject::iteratorStepValue(state, closureData->innerIterator);
             } catch (const Value& e) {
                 // IfAbruptCloseIterator(innerValue, iterated).
-                IteratorObject::iteratorClose(state, obj->underlyingIterator(), e, true);
+                IteratorObject::iteratorClose(state, iterated, e, true);
             }
-            if (!innerValue) {
-                // If innerValue is done, then Set innerAlive to false.
-                closureData->innerAlive = false;
-                closureData->innerIterator = nullptr;
-            } else {
-                // Else, Let completion be Completion(Yield(innerValue)).
+            if (innerValue) {
+                // Yield current inner value
                 return std::make_pair(innerValue.value(), false);
             }
+            // Inner iterator is exhausted; clear state and proceed to fetch next outer value
+            closureData->innerAlive = false;
+            closureData->innerIterator = nullptr;
         }
 
         // Let value be ? IteratorStepValue(iterated).

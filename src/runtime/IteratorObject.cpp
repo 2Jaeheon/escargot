@@ -394,17 +394,9 @@ IteratorRecord* IteratorObject::getIteratorFlattenable(ExecutionState& state, co
     }
 
     // Let method be ? GetMethod(obj, %Symbol.iterator%).
-    Value method = Object::getMethod(state, obj, ObjectPropertyName(state.context()->vmInstance()->globalSymbols().iterator));
-    Value iterator;
-
-    // If method is undefined, then
-    if (method.isUndefined()) {
-        // Let iterator be obj.
-        iterator = obj;
-    } else {
-        // Let iterator be ? Call(method, obj).
-        iterator = Object::call(state, method, obj, 0, nullptr);
-    }
+    const Value method = Object::getMethod(state, obj, ObjectPropertyName(state.context()->vmInstance()->globalSymbols().iterator));
+    // Let iterator be either obj itself (no method) or the result of calling method.
+    const Value iterator = method.isUndefined() ? obj : Object::call(state, method, obj, 0, nullptr);
 
     // If iterator is not an Object, throw a TypeError exception.
     if (!iterator.isObject()) {
