@@ -60,7 +60,13 @@ async def handle_review_request(request: ReviewRequest) -> JSONResponse:
         raise HTTPException(status_code=500, detail=f"Failed to fetch from upstream: {e}")
 
     # Create diff
-    diff_text = run_git_command(["diff", f"-U{DIFF_CONTEXT}", request.base_sha, request.head_sha])
+    diff_text = run_git_command([
+        "diff", "--no-color", "--no-ext-diff", "--text",
+        f"-U{DIFF_CONTEXT}", request.base_sha, request.head_sha
+    ])
+    diff_text = diff_text.replace("\r\n", "\n")
+    if not diff_text.endswith("\n"):
+        diff_text += "\n"
     patch_set = PatchSet(diff_text)
     try:
         print(f"[REVIEW] Diff created. Files in patch: {len(patch_set)}")
