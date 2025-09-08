@@ -37,10 +37,7 @@ OLLAMA_MAX_RETRIES = int(os.getenv("OLLAMA_MAX_RETRIES", "2"))
 INTER_REQUEST_DELAY_SECONDS = float(os.getenv("INTER_REQUEST_DELAY_SECONDS", "5"))
 
 # Regular Expressions
-IDENT_RE = re.compile(r'\b[A-Za-z_]\w*\b')
-FENCE_RE = re.compile(r"^\s*```(?:json|diff|[\w-]+)?\s*|\s*```\s*$", re.MULTILINE)
 JSON_ARRAY_RE = re.compile(r"\[[\s\S]*?\]")
-
 SYMBOL_ONLY = {'{', '}', '};'}
 
 logger = get_logger("review-bot.helpers")
@@ -55,11 +52,7 @@ def run_git_command(command: List[str]) -> str:
         return out
     except subprocess.CalledProcessError as e:
         logger.error(f"GIT command failed: git {' '.join(command)} -> {e}")
-        raise HTTPException(status_code=500, detail="An internal Git command failed.")
-
-def get_file_full_content(head_sha: str, path: str) -> str:
-    return run_git_command(["show", f"{head_sha}:{path}"])
-
+        raise HTTPException(status_code=500, detail="An internal Git command failed.") 
 
 def git_commit_exists(sha: str) -> bool:
     """Return True if the commit exists locally, else False."""
@@ -237,7 +230,7 @@ def try_nearby_align(head_sha: str, path: str, mapping: LineMappingLite,
     lines = head_cache[key]
     total = len(lines)
     base_idx = mapping.target_line_no - 1
-    expected = normalize_for_compare(mapping.content[1:])
+    expected = normalize_for_compare(line_without_prefix(mapping.content))
 
     # First check the current position
     if 0 <= base_idx < total and normalize_for_compare(lines[base_idx]) == expected:
@@ -264,7 +257,7 @@ def build_hunk_based_prompt(path: str, hunk: Hunk, mappings: List[LineMappingLit
 
     commentable = [
         m for m in mappings
-        if m.line_type == 'added' and is_meaningful_code(m.content[1:])
+        if m.line_type == 'added' and is_meaningful_code(line_without_prefix(m.content))
     ]
     if commentable:
         commentable_catalog = [
@@ -309,29 +302,10 @@ class OllamaTimeoutError(Exception):
 
 # Handler that raises OllamaTimeoutError when SIGALRM signal is received
 def _timeout_handler(signum, frame):
-    raise OllamaTimeoutError("Ollama API call timed out after 5 minutes.")
+    raise OllamaTimeoutError(f"Ollama API call timed out after {OLLAMA_TIMEOUT_SECONDS} seconds.")
 
 # Register signal handler
 signal.signal(signal.SIGALRM, _timeout_handler)
-
-def _extract_content(resp) -> str:
-    # Defensively handle Ollama python client variants
-    msg = getattr(resp, "message", None)
-    if msg is not None:
-        c = getattr(msg, "content", None)
-        if isinstance(c, str) and c:
-            return c
-        if isinstance(msg, dict):
-            c = msg.get("content")
-            if isinstance(c, str) and c:
-                return c
-    if isinstance(resp, dict):
-        m = resp.get("message")
-        if isinstance(m, dict):
-            c = m.get("content")
-            if isinstance(c, str) and c:
-                return c
-    return ""
 
 def sanitize_llm_output(raw: str) -> str:
     """

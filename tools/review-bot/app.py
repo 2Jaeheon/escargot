@@ -1,9 +1,9 @@
 import uvicorn
 import os
 import asyncio
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Set, Tuple
 from unidiff import PatchSet
 from schemas import (
     ReviewRequest,
@@ -33,6 +33,80 @@ logger = get_logger("review-bot.app")
 # Limit concurrent /review executions per-process (queue overflowing requests)
 REVIEW_MAX_CONCURRENCY = int(os.getenv("REVIEW_MAX_CONCURRENCY", "1"))
 _review_semaphore = asyncio.Semaphore(REVIEW_MAX_CONCURRENCY)
+
+def _run_review_pass(
+    model_type: str,
+    system_prompt: str,
+    file_path: str,
+    hunk,
+    mappings,
+    mapping_dict: Dict[int, Any],
+    head_sha: str,
+    head_blob_cache: Dict[str, List[str]],
+    skip_ids: Set[int] | None = None,
+) -> Tuple[List[Dict[str, Any]], Set[int]]:
+    """Execute one LLM review pass (defect/refactor) and return (comments, accepted_ids)."""
+    prompt = build_hunk_based_prompt(file_path, hunk, mappings)
+    try:
+        logger.debug(f"{model_type.title()} pass: prompt length={len(prompt)}")
+    except Exception:
+        logger.debug(f"{model_type.title()} pass: prompt length=(unknown)")
+
+    raw = call_ollama_and_parse(prompt, system_prompt, model_type)
+
+    out_comments: List[Dict[str, Any]] = []
+    accepted: Set[int] = set()
+
+    for c in raw:
+        # Schema validation
+        try:
+            llm_comment = LLMReviewComment(**c)
+        except Exception as e:
+            logger.debug(f"Skip({model_type}): schema invalid -> {e} | raw={c}")
+            continue
+
+        # Optional skip set (e.g., refactor after defect)
+        if skip_ids and llm_comment.target_id in skip_ids:
+            logger.debug(f"Skip({model_type}): already accepted id={llm_comment.target_id}")
+            continue
+
+        # Confidence and body validation
+        if llm_comment.confidence < CONFIDENCE_THRESHOLD:
+            logger.debug(f"Skip({model_type}): low confidence {llm_comment.confidence:.2f} < {CONFIDENCE_THRESHOLD}")
+            continue
+        if not validate_comment_body(llm_comment.body):
+            logger.debug(f"Skip({model_type}): body contains prohibited references")
+            continue
+
+        # Mapping check
+        m = mapping_dict.get(llm_comment.target_id)
+        if not m or m.line_type != 'added' or m.target_line_no is None:
+            logger.debug(f"Skip({model_type}): invalid target_id={llm_comment.target_id} or not added line")
+            continue
+
+        # Alignment verification and nearby align attempt
+        line_no = m.target_line_no
+        head_ok = assert_head_alignment(head_sha, file_path, m, head_blob_cache)
+        if head_ok is False:
+            logger.debug(f"Align mismatch at ~{line_no}, trying nearby align...")
+            aligned = try_nearby_align(head_sha, file_path, m, head_blob_cache)
+            if aligned is None:
+                logger.debug(f"Skip({model_type}): nearby align failed")
+                continue
+            line_no = aligned
+
+        final_comment = GitHubComment(
+            path=file_path,
+            body=llm_comment.body,
+            commit_id=head_sha,
+            line=line_no,
+            side="RIGHT"
+        )
+        out_comments.append(final_comment.model_dump())
+        accepted.add(llm_comment.target_id)
+        logger.debug(f"Accept({model_type}): id={llm_comment.target_id} -> line={line_no}")
+
+    return out_comments, accepted
 
 
 @app.middleware("http")
@@ -66,6 +140,7 @@ async def handle_review_request(request: ReviewRequest) -> JSONResponse:
     diff_text = diff_text.replace("\r\n", "\n")
     if not diff_text.endswith("\n"):
         diff_text += "\n"
+
     # Parse diff robustly; if parsing fails, return empty comments instead of 500
     try:
         patch_set = PatchSet.from_string(diff_text)
@@ -80,12 +155,14 @@ async def handle_review_request(request: ReviewRequest) -> JSONResponse:
     all_github_comments: List[Dict[str, Any]] = []
     head_blob_cache: Dict[str, List[str]] = {}
 
+    # Run review pass for each file
     for patched_file in patch_set:
         file_path = patched_file.path
         if not any(file_path.startswith(p) for p in REVIEW_INCLUDE_PATHS):
             continue
         logger.info(f"Processing file: {file_path}")
 
+        # Run review pass for each hunk
         for hunk in patched_file:
             try:
                 logger.debug(f"Hunk {file_path}: -{hunk.source_start},{getattr(hunk, 'source_length', '?')} -> +{hunk.target_start},{getattr(hunk, 'target_length', '?')}")
@@ -100,118 +177,32 @@ async def handle_review_request(request: ReviewRequest) -> JSONResponse:
             added_count = sum(1 for m in mappings if m.line_type == 'added')
             logger.debug(f"Mappings: total={len(mappings)}, added={added_count}")
 
-            # --- Pass 1: Defect Review ---
-            prompt_defect = build_hunk_based_prompt(file_path, hunk, mappings)
-            logger.debug(f"Defect pass: prompt length={len(prompt_defect)}")
-            raw_defects = call_ollama_and_parse(prompt_defect, SYSTEM_PROMPT_DEFECT, 'defect')
-            try:
-                sample_defects = raw_defects[:2]
-                logger.debug(f"Defect raw count={len(raw_defects)} sample={sample_defects}")
-            except Exception:
-                logger.debug("Defect raw: (unable to print sample)")
-            accepted_defect_ids = set()
+            # Run defect pass
+            defect_comments, accepted_defect_ids = _run_review_pass(
+                model_type='defect',
+                system_prompt=SYSTEM_PROMPT_DEFECT,
+                file_path=file_path,
+                hunk=hunk,
+                mappings=mappings,
+                mapping_dict=mapping_dict,
+                head_sha=request.head_sha,
+                head_blob_cache=head_blob_cache,
+            )
+            all_github_comments.extend(defect_comments)
 
-            for c in raw_defects:
-                # Schema validation (skip if invalid)
-                try:
-                    llm_comment = LLMReviewComment(**c)
-                except Exception as e:
-                    logger.debug(f"Skip(defect): schema invalid -> {e} | raw={c}")
-                    continue
-
-                if llm_comment.confidence < CONFIDENCE_THRESHOLD:
-                    logger.debug(f"Skip(defect): low confidence {llm_comment.confidence:.2f} < {CONFIDENCE_THRESHOLD}")
-                    continue
-
-                # Body validation guard - check for prohibited ID/line references
-                if not validate_comment_body(llm_comment.body):
-                    logger.debug(f"Skip(defect): body contains prohibited references")
-                    continue
-
-                m = mapping_dict.get(llm_comment.target_id)
-                if not m or m.line_type != 'added' or m.target_line_no is None:
-                    logger.debug(f"Skip(defect): invalid target_id={llm_comment.target_id} or not added line")
-                    continue
-
-                # Verify alignment against HEAD; if mismatched, try nearby alignment
-                line_no = m.target_line_no
-                head_ok = assert_head_alignment(request.head_sha, file_path, m, head_blob_cache)
-                if head_ok is False:
-                    logger.debug(f"Align mismatch at ~{line_no}, trying nearby align...")
-                    aligned = try_nearby_align(request.head_sha, file_path, m, head_blob_cache)
-                    if aligned is None:
-                        logger.debug("Skip(defect): nearby align failed")
-                        continue
-                    line_no = aligned
-
-                final_comment = GitHubComment(
-                    path=file_path,
-                    body=llm_comment.body,
-                    commit_id=request.head_sha,
-                    line=line_no,
-                    side="RIGHT"
-                )
-                all_github_comments.append(final_comment.model_dump())
-                accepted_defect_ids.add(llm_comment.target_id)
-                logger.debug(f"Accept(defect): id={llm_comment.target_id} -> line={line_no}")
-
-            # --- Pass 2: Refactoring Review ---
-            prompt_refactor = build_hunk_based_prompt(file_path, hunk, mappings)
-            logger.debug(f"Refactor pass: prompt length={len(prompt_refactor)}")
-            raw_refactors = call_ollama_and_parse(prompt_refactor, SYSTEM_PROMPT_REFACTOR, 'refactor')
-            try:
-                sample_ref = raw_refactors[:2]
-                logger.debug(f"Refactor raw count={len(raw_refactors)} sample={sample_ref}")
-            except Exception:
-                logger.debug("Refactor raw: (unable to print sample)")
-
-            for c in raw_refactors:
-                try:
-                    llm_comment = LLMReviewComment(**c)
-                except Exception as e:
-                    logger.debug(f"Skip(refactor): schema invalid -> {e} | raw={c}")
-                    continue
-
-                # If this target_id already produced a defect comment, skip refactor for the same ID
-                if llm_comment.target_id in accepted_defect_ids:
-                    logger.debug(f"Skip(refactor): already accepted as defect id={llm_comment.target_id}")
-                    continue
-
-                if llm_comment.confidence < CONFIDENCE_THRESHOLD:
-                    logger.debug(f"Skip(refactor): low confidence {llm_comment.confidence:.2f} < {CONFIDENCE_THRESHOLD}")
-                    continue
-
-                # Body validation guard - check for prohibited ID/line references
-                if not validate_comment_body(llm_comment.body):
-                    logger.debug(f"Skip(refactor): body contains prohibited references")
-                    continue
-
-                m = mapping_dict.get(llm_comment.target_id)
-                if not m or m.line_type != 'added' or m.target_line_no is None:
-                    logger.debug(f"Skip(refactor): invalid target_id={llm_comment.target_id} or not added line")
-                    continue
-
-                # Verify alignment; if mismatched, try nearby alignment
-                line_no = m.target_line_no
-                head_ok = assert_head_alignment(request.head_sha, file_path, m, head_blob_cache)
-                if head_ok is False:
-                    logger.debug(f"Align mismatch at ~{line_no}, trying nearby align...")
-                    aligned = try_nearby_align(request.head_sha, file_path, m, head_blob_cache)
-                    if aligned is None:
-                        logger.debug("Skip(refactor): nearby align failed")
-                        continue
-                    line_no = aligned
-
-                comment_body = f"{llm_comment.body}"
-                final_comment = GitHubComment(
-                    path=file_path,
-                    body=comment_body,
-                    commit_id=request.head_sha,
-                    line=line_no,
-                    side="RIGHT"
-                )
-                all_github_comments.append(final_comment.model_dump())
-                logger.debug(f"Accept(refactor): id={llm_comment.target_id} -> line={line_no}")
+            # Run refactor pass
+            refactor_comments, _ = _run_review_pass(
+                model_type='refactor',
+                system_prompt=SYSTEM_PROMPT_REFACTOR,
+                file_path=file_path,
+                hunk=hunk,
+                mappings=mappings,
+                mapping_dict=mapping_dict,
+                head_sha=request.head_sha,
+                head_blob_cache=head_blob_cache,
+                skip_ids=accepted_defect_ids,
+            )
+            all_github_comments.extend(refactor_comments)
 
     logger.info(f"Generated {len(all_github_comments)} comments in total.")
     return JSONResponse(content={"comments": all_github_comments})
