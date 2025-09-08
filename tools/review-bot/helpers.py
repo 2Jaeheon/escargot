@@ -50,7 +50,7 @@ def run_git_command(command: List[str]) -> str:
     """Executes a Git command in the repository path and returns the output."""
     try:
         logger.debug(f"GIT exec: git {' '.join(command)} (cwd={REPO_PATH})")
-        out = subprocess.check_output(["git"] + command, cwd=REPO_PATH, text=True).strip()
+        out = subprocess.check_output(["git"] + command, cwd=REPO_PATH, text=True)
         logger.debug(f"GIT ok: len={len(out)}")
         return out
     except subprocess.CalledProcessError as e:
