@@ -64,17 +64,22 @@ async def handle_review_request(request: ReviewRequest) -> JSONResponse:
 
     # Create diff
     diff_text = run_git_command([
-        "diff", "--no-color", "--no-ext-diff",
+        "diff", "--no-color", "--no-ext-diff", "--text",
         f"-U{DIFF_CONTEXT}", request.base_sha, request.head_sha
     ])
     diff_text = diff_text.replace("\r\n", "\n")
     if not diff_text.endswith("\n"):
         diff_text += "\n"
-    patch_set = PatchSet(diff_text)
+    # Parse diff robustly; if parsing fails, return empty comments instead of 500
     try:
-        logger.info(f"Diff created. files={len(patch_set)}")
-    except Exception:
-        logger.info("Diff created. (could not count files)")
+        patch_set = PatchSet.from_string(diff_text)
+        try:
+            logger.info(f"Diff created. files={len(patch_set)}")
+        except Exception:
+            logger.info("Diff created. (could not count files)")
+    except Exception as e:
+        logger.exception(f"Diff parse failed: {e}")
+        return JSONResponse(content={"comments": []})
 
     all_github_comments: List[Dict[str, Any]] = []
     head_blob_cache: Dict[str, List[str]] = {}
