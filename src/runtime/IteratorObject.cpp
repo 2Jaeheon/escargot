@@ -42,11 +42,7 @@ IteratorObject::IteratorObject(ExecutionState& state, Object* proto)
 Value IteratorObject::next(ExecutionState& state)
 {
     auto result = advance(state);
-    Object* r = new Object(state);
-
-    r->defineOwnProperty(state, ObjectPropertyName(state.context()->staticStrings().value), ObjectPropertyDescriptor(result.first, ObjectPropertyDescriptor::AllPresent));
-    r->defineOwnProperty(state, ObjectPropertyName(state.context()->staticStrings().done), ObjectPropertyDescriptor(Value(result.second), ObjectPropertyDescriptor::AllPresent));
-    return r;
+    return IteratorObject::createIterResultObject(state, result.first, result.second);
 }
 
 // https://www.ecma-international.org/ecma-262/10.0/#sec-getiterator
@@ -94,8 +90,6 @@ IteratorRecord* IteratorObject::getIterator(ExecutionState& state, const Value& 
 // https://www.ecma-international.org/ecma-262/10.0/#sec-iteratornext
 Object* IteratorObject::iteratorNext(ExecutionState& state, IteratorRecord* iteratorRecord, const Value& value)
 {
-    auto strings = &state.context()->staticStrings();
-
     IteratorRecord* record = iteratorRecord;
     Value result;
     Value nextMethod = record->m_nextMethod;
