@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import ollama
 from fastapi import HTTPException
 from unidiff import Hunk
+from logger import get_logger
 
 load_dotenv()
 
@@ -42,16 +43,18 @@ JSON_ARRAY_RE = re.compile(r"\[[\s\S]*?\]")
 
 SYMBOL_ONLY = {'{', '}', '};'}
 
+logger = get_logger("review-bot.helpers")
+
 # Git Helpers
 def run_git_command(command: List[str]) -> str:
     """Executes a Git command in the repository path and returns the output."""
     try:
-        print(f"[GIT] exec: git {' '.join(command)} (cwd={REPO_PATH})")
+        logger.debug(f"GIT exec: git {' '.join(command)} (cwd={REPO_PATH})")
         out = subprocess.check_output(["git"] + command, cwd=REPO_PATH, text=True).strip()
-        print(f"[GIT] ok: len={len(out)}")
+        logger.debug(f"GIT ok: len={len(out)}")
         return out
     except subprocess.CalledProcessError as e:
-        print(f"[GIT] command failed: git {' '.join(command)}\n  -> {e}")
+        logger.error(f"GIT command failed: git {' '.join(command)} -> {e}")
         raise HTTPException(status_code=500, detail="An internal Git command failed.")
 
 def get_file_full_content(head_sha: str, path: str) -> str:
@@ -157,7 +160,7 @@ def assert_head_alignment(head_sha: str, path: str, mapping: LineMappingLite,
     lines = head_cache[key]
     idx = mapping.target_line_no - 1
     if not (0 <= idx < len(lines)):
-        print(f"[ALIGN] out-of-range: {path}:{mapping.target_line_no} (len={len(lines)})")
+        logger.debug(f"Align out-of-range: {path}:{mapping.target_line_no} (len={len(lines)})")
         return False
 
     expected = normalize_for_compare(line_without_prefix(mapping.content))
@@ -166,7 +169,9 @@ def assert_head_alignment(head_sha: str, path: str, mapping: LineMappingLite,
     if expected == actual:
         return True
 
-    print(f"[ALIGN MISMATCH] {path}:{mapping.target_line_no}\n  expected: {expected!r}\n  actual:   {actual!r}\n  hint: HEAD SHA mismatch or whitespace?")
+    logger.debug(
+        f"Align mismatch: {path}:{mapping.target_line_no} expected={expected!r} actual={actual!r}"
+    )
     return False
 
 
@@ -301,7 +306,7 @@ def sanitize_llm_output(raw: str) -> str:
         try:
             obj = json.loads(cand)
             if isinstance(obj, list):
-                print(f"[LLM] fenced JSON extracted (len={len(cand)})")
+                logger.debug(f"LLM fenced JSON extracted (len={len(cand)})")
                 return cand
         except Exception:
             pass
@@ -312,13 +317,13 @@ def sanitize_llm_output(raw: str) -> str:
         try:
             obj = json.loads(cand)
             if isinstance(obj, list):
-                print(f"[LLM] inline JSON array extracted (len={len(cand)})")
+                logger.debug(f"LLM inline JSON array extracted (len={len(cand)})")
                 return cand
         except Exception:
             continue
 
     # Return original text if unsuccessful (handle empty list from above)
-    print("[LLM] no JSON array could be extracted from response")
+    logger.debug("LLM no JSON array could be extracted from response")
     return ""
 
 
@@ -380,7 +385,7 @@ def validate_comment_body(body: str) -> bool:
     
     for pattern in prohibited_patterns:
         if re.search(pattern, body_lower):
-            print(f"[FILTER] Body contains prohibited pattern '{pattern}': {body[:100]}...")
+            logger.debug(f"Filter: body contains prohibited pattern '{pattern}': {body[:100]}...")
             return False
     
     return True
@@ -393,8 +398,8 @@ def call_ollama_and_parse(prompt: str, system_prompt: str,
     """
     for attempt in range(OLLAMA_MAX_RETRIES):
         try:
-            print(f"[LLM] Request -> model={MODEL_NAME} type={model_type} prompt_len={len(prompt)}")
-            print(f"[LLM] Attempt {attempt + 1}/{OLLAMA_MAX_RETRIES} with a {OLLAMA_TIMEOUT_SECONDS}s timeout...")
+            logger.info(f"LLM request start model={MODEL_NAME} type={model_type}")
+            logger.debug(f"LLM attempt {attempt + 1}/{OLLAMA_MAX_RETRIES} timeout={OLLAMA_TIMEOUT_SECONDS}s")
             
             signal.alarm(OLLAMA_TIMEOUT_SECONDS)
 
@@ -424,11 +429,6 @@ def call_ollama_and_parse(prompt: str, system_prompt: str,
                         content = msg.get("content")
                 if not isinstance(content, str) or not content:
                     continue
-                try:
-                    print(content, end="", flush=True)
-                except Exception:
-                    pass
-                
                 buf_parts.append(content)
                 text = "".join(buf_parts)
                 span = _find_complete_json_array_span(text)
@@ -439,11 +439,8 @@ def call_ollama_and_parse(prompt: str, system_prompt: str,
                         raw_comments = json.loads(array_text)
                         if isinstance(raw_comments, list):
                             parsed = [c for c in raw_comments if isinstance(c, dict)]
-                            try:
-                                print("\n[LLM] stream-early-stop: json array complete", flush=True)
-                                print(f"[LLM] items={len(parsed)}", flush=True)
-                            except Exception:
-                                pass
+                            logger.debug("LLM stream-early-stop: json array complete")
+                            logger.debug(f"LLM items={len(parsed)}")
                             break
                     except Exception:
                         pass
@@ -455,17 +452,17 @@ def call_ollama_and_parse(prompt: str, system_prompt: str,
                 text = "".join(buf_parts)
                 cleaned = sanitize_llm_output(text)
                 if not cleaned:
-                    print("[LLM] sanitize produced empty string; returning []")
+                    logger.debug("LLM sanitize produced empty string; returning []")
                     return []
                 raw_comments = json.loads(cleaned)
                 if not isinstance(raw_comments, list):
-                    print(f"[LLM] parsed non-list JSON: type={type(raw_comments)}")
+                    logger.debug(f"LLM parsed non-list JSON: type={type(raw_comments)}")
                     return []
                 parsed = [c for c in raw_comments if isinstance(c, dict)]
 
-            print(f"[LLM] parsed comments: dict_only={len(parsed)} type={model_type}")
+            logger.info(f"LLM parsed comments: count={len(parsed)} type={model_type}")
             try:
-                print(f"[LLM] sample parsed: {parsed[:2]}")
+                logger.debug(f"LLM sample parsed: {parsed[:2]}")
             except Exception:
                 pass
             
@@ -473,15 +470,15 @@ def call_ollama_and_parse(prompt: str, system_prompt: str,
             return parsed
 
         except OllamaTimeoutError as e:
-            print(f"\n[LLM] WARNING: {e}")
+            logger.warning(f"LLM timeout: {e}")
             if attempt + 1 < OLLAMA_MAX_RETRIES:
-                print(f"[LLM] Retrying...")
+                logger.info("LLM retrying...")
             else:
-                print("[LLM] ERROR: Max retries reached. Aborting.")
+                logger.error("LLM max retries reached. Aborting.")
                 return []
         
         except Exception as e:
-            print(f"\n[LLM] An unexpected error occurred: {e}")
+            logger.error(f"LLM unexpected error: {e}")
             return []
         
         finally:
