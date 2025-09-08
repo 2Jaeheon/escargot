@@ -64,7 +64,7 @@ async def handle_review_request(request: ReviewRequest) -> JSONResponse:
 
     # Create diff
     diff_text = run_git_command([
-        "diff", "--no-color", "--no-ext-diff", "--text",
+        "diff", "--no-color", "--no-ext-diff",
         f"-U{DIFF_CONTEXT}", request.base_sha, request.head_sha
     ])
     diff_text = diff_text.replace("\r\n", "\n")
