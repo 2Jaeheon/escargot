@@ -1,12 +1,6 @@
 import logging
-import logging.handlers
 import os
-
-try:
-	from systemd.journal import JournalHandler  # type: ignore
-	_HAS_JOURNAL = True
-except Exception:
-	_HAS_JOURNAL = False
+import sys
 
 
 def get_logger(name: str = "review-bot") -> logging.Logger:
@@ -14,15 +8,15 @@ def get_logger(name: str = "review-bot") -> logging.Logger:
 	if logger.handlers:
 		return logger
 
-	logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
+	# Level from environment (default DEBUG)
+	logger.setLevel(os.getenv("LOG_LEVEL", "DEBUG").upper())
 
-	if _HAS_JOURNAL:
-		handler = JournalHandler(SYSLOG_IDENTIFIER=name)
-	else:
-		handler = logging.StreamHandler()
-		fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
-		handler.setFormatter(logging.Formatter(fmt))
-
+	# Always log to stdout with minimal unified format
+	handler = logging.StreamHandler(sys.stdout)
+	formatter = logging.Formatter("%(levelname)s: %(message)s")
+	handler.setFormatter(formatter)
 	logger.addHandler(handler)
+
+	# Avoid duplicate logs via root
 	logger.propagate = False
 	return logger
