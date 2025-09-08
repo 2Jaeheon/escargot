@@ -33,6 +33,13 @@
 
 namespace Escargot {
 
+// Common helper for unary math functions that take one double and return double.
+static inline Value mathUnary(ExecutionState& state, Value* argv, double (*fn)(double))
+{
+    double x = argv[0].toNumber(state);
+    return Value(Value::DoubleToIntConvertibleTestNeeds, fn(x));
+}
+
 static Value builtinMathAbs(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
     return Value(Value::DoubleToIntConvertibleTestNeeds, std::abs(argv[0].toNumber(state)));
@@ -98,56 +105,47 @@ static Value builtinMathRound(ExecutionState& state, Value thisValue, size_t arg
 
 static Value builtinMathSin(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    Value x = argv[0];
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::sin(x.toNumber(state)));
+    return mathUnary(state, argv, ieee754::sin);
 }
 
 static Value builtinMathSinh(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::sinh(x));
+    return mathUnary(state, argv, ieee754::sinh);
 }
 
 static Value builtinMathCos(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    Value x = argv[0];
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::cos(x.toNumber(state)));
+    return mathUnary(state, argv, ieee754::cos);
 }
 
 static Value builtinMathCosh(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::cosh(x));
+    return mathUnary(state, argv, ieee754::cosh);
 }
 
 static Value builtinMathAcos(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::acos(x));
+    return mathUnary(state, argv, ieee754::acos);
 }
 
 static Value builtinMathAcosh(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::acosh(x));
+    return mathUnary(state, argv, ieee754::acosh);
 }
 
 static Value builtinMathAsin(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::asin(x));
+    return mathUnary(state, argv, ieee754::asin);
 }
 
 static Value builtinMathAsinh(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::asinh(x));
+    return mathUnary(state, argv, ieee754::asinh);
 }
 
 static Value builtinMathAtan(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::atan(x));
+    return mathUnary(state, argv, ieee754::atan);
 }
 
 static Value builtinMathAtan2(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
@@ -159,26 +157,22 @@ static Value builtinMathAtan2(ExecutionState& state, Value thisValue, size_t arg
 
 static Value builtinMathAtanh(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::atanh(x));
+    return mathUnary(state, argv, ieee754::atanh);
 }
 
 static Value builtinMathTan(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::tan(x));
+    return mathUnary(state, argv, ieee754::tan);
 }
 
 static Value builtinMathTanh(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::tanh(x));
+    return mathUnary(state, argv, ieee754::tanh);
 }
 
 static Value builtinMathTrunc(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, trunc(x));
+    return mathUnary(state, argv, ::trunc);
 }
 
 static Value builtinMathSign(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
@@ -200,8 +194,7 @@ static Value builtinMathSign(ExecutionState& state, Value thisValue, size_t argc
 
 static Value builtinMathSqrt(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    Value x = argv[0];
-    return Value(Value::DoubleToIntConvertibleTestNeeds, sqrt(x.toNumber(state)));
+    return mathUnary(state, argv, ::sqrt);
 }
 
 static Value builtinMathPow(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
@@ -285,8 +278,7 @@ static Value builtinMathPow(ExecutionState& state, Value thisValue, size_t argc,
 
 static Value builtinMathCbrt(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::cbrt(x));
+    return mathUnary(state, argv, ieee754::cbrt);
 }
 
 static Value builtinMathCeil(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
@@ -313,8 +305,7 @@ static Value builtinMathClz32(ExecutionState& state, Value thisValue, size_t arg
 
 static Value builtinMathFloor(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, floor(x));
+    return mathUnary(state, argv, ::floor);
 }
 
 static Value builtinMathFround(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
@@ -503,31 +494,30 @@ static Value builtinMathIMul(ExecutionState& state, Value thisValue, size_t argc
 {
     int32_t x = argv[0].toInt32(state);
     int32_t y = argv[1].toInt32(state);
-    return Value(x * y);
+    // Multiply in 64-bit and take low 32 bits to match JS Math.imul semantics
+    int64_t prod = static_cast<int64_t>(x) * static_cast<int64_t>(y);
+    uint32_t low = static_cast<uint32_t>(prod);
+    return Value(static_cast<int32_t>(low));
 }
 
 static Value builtinMathLog(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::log(x));
+    return mathUnary(state, argv, ieee754::log);
 }
 
 static Value builtinMathLog1p(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::log1p(x));
+    return mathUnary(state, argv, ieee754::log1p);
 }
 
 static Value builtinMathLog10(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::log10(x));
+    return mathUnary(state, argv, ieee754::log10);
 }
 
 static Value builtinMathLog2(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::log2(x));
+    return mathUnary(state, argv, ieee754::log2);
 }
 
 static Value builtinMathRandom(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
@@ -538,14 +528,12 @@ static Value builtinMathRandom(ExecutionState& state, Value thisValue, size_t ar
 
 static Value builtinMathExp(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::exp(x));
+    return mathUnary(state, argv, ieee754::exp);
 }
 
 static Value builtinMathExpm1(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    double x = argv[0].toNumber(state);
-    return Value(Value::DoubleToIntConvertibleTestNeeds, ieee754::expm1(x));
+    return mathUnary(state, argv, ieee754::expm1);
 }
 
 enum class SumPreciseState {
