@@ -61,6 +61,49 @@ def get_file_full_content(head_sha: str, path: str) -> str:
     return run_git_command(["show", f"{head_sha}:{path}"])
 
 
+def git_commit_exists(sha: str) -> bool:
+    """Return True if the commit exists locally, else False."""
+    try:
+        run_git_command(["cat-file", "-e", f"{sha}^{{commit}}"])
+        return True
+    except Exception:
+        return False
+
+
+def fetch_upstream_with_fallback(pull_request_number: int, base_sha: str, head_sha: str) -> None:
+    """
+    Ensure upstream refs are up-to-date and required commits are present locally.
+    - Try prune fetch
+    - Try PR ref fetch (non-fatal if missing)
+    - Ensure base/head commits exist; if missing, fetch by SHA
+    - If still missing, raise HTTPException 400
+    """
+    # Prune/update
+    try:
+        logger.debug("Upstream prune fetch start")
+        run_git_command(["fetch", "upstream", "--prune"])
+        logger.debug("Upstream prune fetch done")
+    except Exception as e:
+        logger.warning(f"Upstream prune fetch failed (continuing): {e}")
+
+    # PR ref (best-effort)
+    try:
+        run_git_command(["fetch", "upstream", f"refs/pull/{pull_request_number}/head"])
+    except Exception as e:
+        logger.warning(f"PR ref not found (continuing with SHAs): {e}")
+
+    # Ensure SHAs
+    for sha in [base_sha, head_sha]:
+        if not git_commit_exists(sha):
+            try:
+                run_git_command(["fetch", "upstream", sha])
+            except Exception as e:
+                logger.warning(f"Direct SHA fetch failed (sha={sha}): {e}")
+        if not git_commit_exists(sha):
+            logger.error(f"Missing commit after fetch attempts: {sha}")
+            raise HTTPException(status_code=400, detail=f"Missing commit in upstream: {sha}")
+
+
 # Hunk -> Line mappings
 class LineMappingLite:
     """Lightweight runtime struct (to avoid circular imports from schemas)."""

@@ -23,6 +23,7 @@ from helpers import (
     assert_head_alignment,
     try_nearby_align,
     validate_comment_body,
+    fetch_upstream_with_fallback,
 )
 from logger import get_logger
 
@@ -52,15 +53,10 @@ async def handle_review_request(request: ReviewRequest) -> JSONResponse:
     """
     logger.info(f"Start review PR=#{request.pull_request_number} {request.base_sha}..{request.head_sha}")
 
-    # Fetch latest upstream data
-    try:
-        logger.info("Fetching latest data from upstream...")
-        run_git_command(["fetch", "upstream", "--prune"])
-        run_git_command(["fetch", "upstream", f"refs/pull/{request.pull_request_number}/head"])
-        logger.info("Fetch complete.")
-    except Exception as e:
-        logger.exception(f"Fetch failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch from upstream: {e}")
+    # Fetch latest upstream data (robust to missing PR ref)
+    logger.info("Fetching latest data from upstream...")
+    fetch_upstream_with_fallback(request.pull_request_number, request.base_sha, request.head_sha)
+    logger.info("Fetch complete.")
 
     # Create diff
     diff_text = run_git_command([
