@@ -832,6 +832,71 @@ public:
         return this->lookahead.type == Token::IdentifierToken && this->lookahead.equalsToKeywordNoEscape(keywordKind);
     }
 
+    // RAII guard for toggling boolean flags in ParserContext
+    struct BoolMemberGuard {
+        ParserContext* ctx;
+        bool ParserContext::* member;
+        bool oldValue;
+
+        BoolMemberGuard(ParserContext* context, bool ParserContext::* member, bool newValue)
+            : ctx(context)
+            , member(member)
+            , oldValue(context->*member)
+        {
+            context->*member = newValue;
+        }
+
+        ~BoolMemberGuard()
+        {
+            ctx->*member = oldValue;
+        }
+    };
+
+    // Consume the next token if it matches the specified punctuator and return whether it consumed.
+    ALWAYS_INLINE bool consume(PunctuatorKind value)
+    {
+        if (this->match(value)) {
+            this->nextToken();
+            return true;
+        }
+        return false;
+    }
+
+    // Consume the next token if it matches the specified keyword and return whether it consumed.
+    ALWAYS_INLINE bool consumeKeyword(KeywordKind keyword)
+    {
+        if (this->matchKeyword(keyword)) {
+            this->nextToken();
+            return true;
+        }
+        return false;
+    }
+
+    // Consume the next token if it matches the specified contextual keyword and return whether it consumed.
+    ALWAYS_INLINE bool consumeContextualKeyword(KeywordKind keywordKind)
+    {
+        if (this->matchContextualKeyword(keywordKind)) {
+            this->nextToken();
+            return true;
+        }
+        return false;
+    }
+
+    // Common count limit checks
+    ALWAYS_INLINE void checkParamCountLimit(size_t count)
+    {
+        if (UNLIKELY(count > 65535)) {
+            this->throwError("too many parameters in function");
+        }
+    }
+
+    ALWAYS_INLINE void checkArgCountLimit(size_t count)
+    {
+        if (UNLIKELY(count > 65535)) {
+            this->throwError("too many arguments in call");
+        }
+    }
+
     // Return true if the next token is an assignment operator
 
     bool matchAssign()
@@ -1325,8 +1390,7 @@ public:
         this->nextToken();
         ASTNodeList elements;
         while (!this->match(RightSquareBracket)) {
-            if (this->match(Comma)) {
-                this->nextToken();
+            if (this->consume(Comma)) {
                 elements.append(this->allocator, nullptr);
             } else {
                 if (this->match(PeriodPeriodPeriod)) {
@@ -1532,9 +1596,7 @@ public:
             }
         }
         this->expect(RightParenthesis);
-        if (UNLIKELY(options.params.size() > 65535)) {
-            this->throwError("too many parameters in function");
-        }
+        this->checkParamCountLimit(options.params.size());
 
         this->context->inParameterParsing = oldInParameterParsing;
         this->context->inParameterNameParsing = oldInParameterNameParsing;
@@ -1624,8 +1686,7 @@ public:
         bool hasSpreadElement = false;
 
         while (!this->match(RightSquareBracket)) {
-            if (this->match(Comma)) {
-                this->nextToken();
+            if (this->consume(Comma)) {
                 elements.append(this->allocator, nullptr);
             } else if (this->match(PeriodPeriodPeriod)) {
                 elements.append(this->allocator, this->parseSpreadElement<ASTBuilder, true>(builder));
@@ -1678,11 +1739,8 @@ public:
 
         this->nextToken();
 
-        const bool previousAllowArguments = this->context->allowArguments;
-        const bool previousAllowSuperProperty = this->context->allowSuperProperty;
-
-        this->context->allowArguments = false;
-        this->context->allowSuperProperty = true;
+        BoolMemberGuard guardAllowArguments(this->context, &ParserContext::allowArguments, false);
+        BoolMemberGuard guardAllowSuperProperty(this->context, &ParserContext::allowSuperProperty, true);
 
         MetaNode node = this->createNode();
         ASTNode expr = this->parseAssignmentExpressionAndWrapIntoArrowFunction(builder, className, debuggerLineStart);
@@ -1789,11 +1847,8 @@ public:
 
         this->nextToken();
 
-        const bool previousAllowArguments = this->context->allowArguments;
-        const bool previousAllowSuperProperty = this->context->allowSuperProperty;
-
-        this->context->allowArguments = false;
-        this->context->allowSuperProperty = true;
+        BoolMemberGuard guardAllowArguments2(this->context, &ParserContext::allowArguments, false);
+        BoolMemberGuard guardAllowSuperProperty2(this->context, &ParserContext::allowSuperProperty, true);
 
         ASTNode expr = this->parseAssignmentExpressionAndWrapIntoArrowFunction(builder, AtomicString(), debuggerLineStart);
         this->consumeSemicolon();
@@ -2202,8 +2257,7 @@ public:
         ASTNode exprNode = nullptr;
 
         this->nextToken();
-        if (this->match(RightParenthesis)) {
-            this->nextToken();
+        if (this->consume(RightParenthesis)) {
             if (!this->match(Arrow)) {
                 this->expect(Arrow);
             }
@@ -2238,8 +2292,7 @@ public:
                         }
                         this->nextToken();
 
-                        if (this->match(RightParenthesis)) {
-                            this->nextToken();
+                        if (this->consume(RightParenthesis)) {
                             for (ASTSentinelNode expression = expressions.begin(); expression != expressions.end(); expression = expression->next()) {
                                 expression->setASTNode(builder.reinterpretExpressionAsPattern(expression->astNode()));
                             }
@@ -2339,9 +2392,7 @@ public:
             }
         }
         this->expect(RightParenthesis);
-        if (UNLIKELY(args.size() > 65535)) {
-            this->throwError("too many arguments in call");
-        }
+        this->checkArgCountLimit(args.size());
 
         return args;
     }
@@ -2438,20 +2489,16 @@ public:
                 this->throwUnexpectedToken(*nameToken);
             }
             return this->finalize(node, builder.createMetaPropertyNode(MetaPropertyNode::ImportMeta));
-        } else if (this->match(LeftParenthesis)) {
-            this->nextToken();
+        } else if (this->consume(LeftParenthesis)) {
             ASTNode specifier = this->isolateCoverGrammar(builder, &Parser::parseAssignmentExpression<ASTBuilder, false>);
             ASTNode option = nullptr;
-            if (this->match(PunctuatorKind::Comma)) {
-                this->nextToken();
+            if (this->consume(PunctuatorKind::Comma)) {
 
                 // Comma before close bracket is allowed
                 if (!this->match(PunctuatorKind::RightParenthesis)) {
                     option = this->isolateCoverGrammar(builder, &Parser::parseAssignmentExpression<ASTBuilder, false>);
 
-                    if (this->match(PunctuatorKind::Comma)) {
-                        this->nextToken();
-                    }
+                    this->consume(PunctuatorKind::Comma);
                 }
             }
             this->expect(RightParenthesis);
@@ -2491,9 +2538,7 @@ public:
             }
         }
         this->expect(RightParenthesis);
-        if (UNLIKELY(args.size() > 65535)) {
-            this->throwError("too many arguments in call");
-        }
+        this->checkArgCountLimit(args.size());
 
         return args;
     }
@@ -4146,9 +4191,7 @@ public:
         ASTNode test = this->parseExpression(builder);
 
         this->expect(RightParenthesis);
-        if (this->match(SemiColon)) {
-            this->nextToken();
-        }
+        this->consume(SemiColon);
 
         return this->finalize(node, builder.createDoWhileStatementNode(test, body));
     }
@@ -5898,8 +5941,7 @@ public:
         size_t debuggerLineStart = 0;
 #endif /* ESCARGOT_DEBUGGER */
 
-        if (this->match(Multiply)) {
-            this->nextToken();
+        if (this->consume(Multiply)) {
         } else {
             computed = this->match(LeftSquareBracket);
             keyNode = this->parseObjectPropertyKey(builder, !computed, &isPrivate);
@@ -5916,8 +5958,7 @@ public:
                 }
                 mayMethodStartNode = this->createNode();
                 computed = this->match(LeftSquareBracket);
-                if (this->match(Multiply)) {
-                    this->nextToken();
+                if (this->consume(Multiply)) {
                 } else {
                     keyNode = this->parseObjectPropertyKey(builder, !computed, &isPrivate);
                 }
@@ -6240,8 +6281,7 @@ public:
 
         this->expect(LeftBrace);
         while (!this->match(RightBrace)) {
-            if (this->match(SemiColon)) {
-                this->nextToken();
+            if (this->consume(SemiColon)) {
             } else {
                 ASTNode classElement = this->parseClassElement(builder, constructor, hasSuperClass, className, fieldCount, privateNames);
                 if (classElement) {
