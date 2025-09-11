@@ -78,6 +78,74 @@ static Value builtinStringToString(ExecutionState& state, Value thisValue, size_
     }                                                                                                                                                                                                                                         \
     String* NAME = thisValue.toString(state);
 
+// String builtins common helpers
+static inline double getOptionalIntegerArg(ExecutionState& state, size_t argc, Value* argv, size_t index, double defaultValue)
+{
+    if (argc > index && !argv[index].isUndefined()) {
+        return argv[index].toInteger(state);
+    }
+    return defaultValue;
+}
+
+static inline size_t clampIndexToLength(double pos, size_t len)
+{
+    if (std::isnan(pos) || pos <= 0) {
+        return 0;
+    }
+    if (pos >= static_cast<double>(len)) {
+        return len;
+    }
+    return static_cast<size_t>(pos);
+}
+
+static inline bool isRegExpLike(ExecutionState& state, const Value& v)
+{
+    return v.isObject() && v.asObject()->isRegExp(state);
+}
+
+static inline bool stringEqualRange(String* source, size_t start, String* pattern)
+{
+    const auto& srcData = source->bufferAccessData();
+    const auto& patData = pattern->bufferAccessData();
+    for (size_t i = 0; i < patData.length; i++) {
+        if (srcData.charAt(start + i) != patData.charAt(i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static inline Value stringStartsWithImpl(ExecutionState& state, String* S, String* searchStr, double pos)
+{
+    size_t len = S->length();
+    size_t start = clampIndexToLength(pos, len);
+    size_t searchLength = searchStr->length();
+    if (searchLength + start > len) {
+        return Value(false);
+    }
+    return Value(stringEqualRange(S, start, searchStr));
+}
+
+static inline Value stringEndsWithImpl(ExecutionState& state, String* S, String* searchStr, double endPosition)
+{
+    size_t len = S->length();
+    size_t end = clampIndexToLength(endPosition, len);
+    size_t searchLength = searchStr->length();
+    if (searchLength > end) {
+        return Value(false);
+    }
+    size_t start = end - searchLength;
+    return Value(stringEqualRange(S, start, searchStr));
+}
+
+static inline Value stringIncludesImpl(ExecutionState& state, String* S, String* searchStr, double pos)
+{
+    size_t len = S->length();
+    size_t start = clampIndexToLength(pos, len);
+    auto found = S->find(searchStr, start);
+    return Value(found != SIZE_MAX);
+}
+
 static Value builtinStringIndexOf(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
     RESOLVE_THIS_BINDING_TO_STRING(str, String, indexOf);
@@ -1174,92 +1242,26 @@ static Value builtinStringValueOf(ExecutionState& state, Value thisValue, size_t
 
 static Value builtinStringStartsWith(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    // Let O be ? RequireObjectCoercible(this value).
-    // Let S be ? ToString(O).
     RESOLVE_THIS_BINDING_TO_STRING(S, String, startsWith);
-    Value searchString = argv[0];
-    // Let isRegExp be ? IsRegExp(searchString).
-    // If isRegExp is true, throw a TypeError exception.
-
-    if (searchString.isObject() && searchString.asObject()->isRegExp(state)) {
+    Value searchValue = argv[0];
+    if (isRegExpLike(state, searchValue)) {
         ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "can't use RegExp with startsWith");
     }
-    // Let searchStr be ? ToString(searchString).
-    String* searchStr = searchString.toString(state);
-    // Let pos be ? ToInteger(position). (If position is undefined, this step produces the value 0.)
-    double pos = 0;
-    if (argc >= 2) {
-        pos = argv[1].toInteger(state);
-    }
-
-    // Let len be the number of elements in S.
-    double len = S->length();
-    // Let start be min(max(pos, 0), len).
-    double start = std::min(std::max(pos, 0.0), len);
-    // Let searchLength be the number of elements in searchStr.
-    double searchLength = searchStr->length();
-    // If searchLength+start is greater than len, return false.
-    if (searchLength + start > len) {
-        return Value(false);
-    }
-    // If the sequence of elements of S starting at start of length searchLength is the same as the full element sequence of searchStr, return true.
-    // Otherwise, return false.
-    const auto& srcData = S->bufferAccessData();
-    const auto& src2Data = searchStr->bufferAccessData();
-
-    for (size_t i = 0; i < src2Data.length; i++) {
-        if (srcData.charAt(i + start) != src2Data.charAt(i)) {
-            return Value(false);
-        }
-    }
-
-    return Value(true);
+    String* searchStr = searchValue.toString(state);
+    double pos = getOptionalIntegerArg(state, argc, argv, 1, 0);
+    return stringStartsWithImpl(state, S, searchStr, pos);
 }
 
 static Value builtinStringEndsWith(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    // Let O be ? RequireObjectCoercible(this value).
-    // Let S be ? ToString(O).
     RESOLVE_THIS_BINDING_TO_STRING(S, String, endsWith);
-    Value searchString = argv[0];
-    // Let isRegExp be ? IsRegExp(searchString).
-    // If isRegExp is true, throw a TypeError exception.
-    if (searchString.isObject() && searchString.asObject()->isRegExp(state)) {
+    Value searchValue = argv[0];
+    if (isRegExpLike(state, searchValue)) {
         ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "can't use RegExp with endsWith");
     }
-    // Let len be the number of elements in S.
-    double len = S->length();
-
-    // Let searchStr be ? ToString(searchString).
-    String* searchStr = searchString.toString(state);
-    // If endPosition is undefined, let pos be len, else let pos be ? ToInteger(endPosition).
-    double pos = 0;
-    if (argc >= 2 && !argv[1].isUndefined()) {
-        pos = argv[1].toInteger(state);
-    } else {
-        pos = len;
-    }
-
-    // Let end be min(max(pos, 0), len).
-    double end = std::min(std::max(pos, 0.0), len);
-    // Let searchLength be the number of elements in searchStr.
-    double searchLength = searchStr->length();
-    // Let start be end - searchLength.
-    double start = end - searchLength;
-    // If start is less than 0, return false.
-    if (start < 0) {
-        return Value(false);
-    }
-    // If the sequence of elements of S starting at start of length searchLength is the same as the full element sequence of searchStr, return true.
-    const auto& srcData = S->bufferAccessData();
-    const auto& src2Data = searchStr->bufferAccessData();
-    for (size_t i = 0; i < searchLength; i++) {
-        if (srcData.charAt(i + start) != src2Data.charAt(i)) {
-            return Value(false);
-        }
-    }
-
-    return Value(true);
+    String* searchStr = searchValue.toString(state);
+    double endPosition = (argc >= 2 && !argv[1].isUndefined()) ? argv[1].toInteger(state) : static_cast<double>(S->length());
+    return stringEndsWithImpl(state, S, searchStr, endPosition);
 }
 
 // ( template, ...substitutions )
@@ -1550,37 +1552,14 @@ DEFINE_STRING_ADDITIONAL_HTML_FUNCTION(sup, state.context()->staticStrings().sup
 
 static Value builtinStringIncludes(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
-    // Let O be ? RequireObjectCoercible(this value).
-    // Let S be ? ToString(O).
     RESOLVE_THIS_BINDING_TO_STRING(S, String, includes);
-    // Let isRegExp be ? IsRegExp(searchString).
-    // If isRegExp is true, throw a TypeError exception.
-    Value searchString = argv[0];
-    if (searchString.isObject() && searchString.asObject()->isRegExp(state)) {
+    Value searchValue = argv[0];
+    if (isRegExpLike(state, searchValue)) {
         ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "can't use RegExp with includes");
     }
-
-    // Let searchStr be ? ToString(searchString).
-    String* searchStr = searchString.toString(state);
-
-    // Let pos be ? ToInteger(position). (If position is undefined, this step produces the value 0.)
-    double pos = 0;
-    if (argc >= 2) {
-        pos = argv[1].toInteger(state);
-    }
-
-    // Let len be the number of elements in S.
-    double len = S->length();
-
-    // Let start be min(max(pos, 0), len).
-    double start = std::min(std::max(pos, 0.0), len);
-    // Let searchLen be the number of elements in searchStr.
-    // If there exists any integer k not smaller than start such that k + searchLen is not greater than len, and for all nonnegative integers j less than searchLen, the code unit at index k+j of S is the same as the code unit at index j of searchStr, return true; but if there is no such integer k, return false.
-    auto ret = S->find(searchStr, start);
-    if (ret == SIZE_MAX) {
-        return Value(false);
-    }
-    return Value(true);
+    String* searchStr = searchValue.toString(state);
+    double pos = getOptionalIntegerArg(state, argc, argv, 1, 0);
+    return stringIncludesImpl(state, S, searchStr, pos);
 }
 
 // https://tc39.es/ecma262/multipage/text-processing.html#sec-string.prototype.iswellformed
