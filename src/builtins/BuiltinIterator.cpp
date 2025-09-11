@@ -27,6 +27,51 @@
 
 namespace Escargot {
 
+// Small localized helpers to reduce duplicated try/catch + iteratorClose patterns.
+// These stay file-local and do not change semantics.
+static inline Value callAndCloseOnThrow(ExecutionState& state,
+                                        IteratorRecord* closeOn,
+                                        const Value& func,
+                                        const Value& thisArg,
+                                        size_t argc,
+                                        Value* argv,
+                                        bool closeOnThrow = true)
+{
+    try {
+        // Slight duplication left intentionally for clarity (candidate for cleanup)
+        if (argc == 0) {
+            return Object::call(state, func, thisArg, 0, nullptr);
+        }
+        return Object::call(state, func, thisArg, argc, argv);
+    } catch (const Value& e) {
+        // Propagate via IteratorClose as per spec narrative in call sites
+        if (closeOnThrow) {
+            IteratorObject::iteratorClose(state, closeOn, e, true);
+        }
+        return Value();
+    }
+}
+
+static inline IteratorRecord* getFlattenableOrClose(ExecutionState& state,
+                                                    const Value& obj,
+                                                    IteratorObject::PrimitiveHandling handling,
+                                                    IteratorRecord* closeOn)
+{
+    try {
+        return IteratorObject::getIteratorFlattenable(state, obj, handling);
+    } catch (const Value& e) {
+        IteratorObject::iteratorClose(state, closeOn, e, true);
+        return nullptr;
+    }
+}
+
+static inline void ensureCallableOrThrow(ExecutionState& state, const Value& func, const char* message = "callable expected")
+{
+    if (!func.isCallable()) {
+        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, message);
+    }
+}
+
 // https://tc39.es/ecma262/#sec-iterator.from
 static Value builtinIteratorFrom(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
@@ -187,12 +232,7 @@ static std::pair<Value, bool> iteratorMapClosure(ExecutionState& state, Iterator
     }
 
     Value argv[2] = { value.value(), Value(closureData->counter) };
-    Value mapped;
-    try {
-        mapped = Object::call(state, mapper, Value(), 2, argv);
-    } catch (const Value& e) {
-        IteratorObject::iteratorClose(state, iterated, e, true);
-    }
+    Value mapped = callAndCloseOnThrow(state, iterated, mapper, Value(), 2, argv);
     closureData->counter = StorePositiveNumberAsOddNumber(closureData->counter + 1);
     return std::make_pair(mapped, false);
 }
@@ -208,9 +248,7 @@ static Value builtinIteratorMap(ExecutionState& state, Value thisValue, size_t a
     }
     // If IsCallable(mapper) is false, throw a TypeError exception.
     const Value& mapper = argv[0];
-    if (!mapper.isCallable()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "mapper is not callable");
-    }
+    ensureCallableOrThrow(state, mapper, "mapper is not callable");
 
     // Let iterated be ? GetIteratorDirect(O).
     IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O.asObject());
@@ -315,12 +353,7 @@ static std::pair<Value, bool> iteratorFilterClosure(ExecutionState& state, Itera
         }
 
         Value argv[2] = { value.value(), Value(closureData->counter) };
-        Value selected;
-        try {
-            selected = Object::call(state, predicate, Value(), 2, argv);
-        } catch (const Value& e) {
-            IteratorObject::iteratorClose(state, iterated, e, true);
-        }
+        Value selected = callAndCloseOnThrow(state, iterated, predicate, Value(), 2, argv);
 
         closureData->counter = StorePositiveNumberAsOddNumber(closureData->counter + 1);
         if (selected.toBoolean()) {
@@ -340,9 +373,7 @@ static Value builtinIteratorFilter(ExecutionState& state, Value thisValue, size_
     }
     // If IsCallable(predicate) is false, throw a TypeError exception.
     const Value& predicate = argv[0];
-    if (!predicate.isCallable()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "predicate is not callable");
-    }
+    ensureCallableOrThrow(state, predicate, "predicate is not callable");
 
     // Let iterated be ? GetIteratorDirect(O).
     IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O.asObject());
@@ -393,12 +424,7 @@ static Value builtinIteratorEvery(ExecutionState& state, Value thisValue, size_t
         }
 
         Value args[2] = { value.value(), Value(counter) };
-        Value result;
-        try {
-            result = Object::call(state, predicate, Value(), 2, args);
-        } catch (const Value& e) {
-            IteratorObject::iteratorClose(state, iterated, e, true);
-        }
+        Value result = callAndCloseOnThrow(state, iterated, predicate, Value(), 2, args);
 
         if (!result.toBoolean()) {
             return IteratorObject::iteratorClose(state, iterated, Value(false), false);
@@ -465,11 +491,8 @@ static Value builtinIteratorReduce(ExecutionState& state, Value thisValue, size_
         }
 
         Value args[3] = { accumulator, value.value(), Value(counter) };
-        Value result;
-        try {
-            result = Object::call(state, reducer, Value(), 3, args);
-        } catch (const Value& e) {
-            IteratorObject::iteratorClose(state, iterated, e, true);
+        Value result = callAndCloseOnThrow(state, iterated, reducer, Value(), 3, args);
+        if (result.isEmpty()) {
             return Value();
         }
 
@@ -512,14 +535,7 @@ static Value builtinIteratorFind(ExecutionState& state, Value thisValue, size_t 
 
         // Let result be Completion(Call(predicate, undefined, « value, 𝔽(counter) »)).
         Value argv[2] = { value.value(), Value(counter) };
-        Value result;
-
-        try {
-            result = Object::call(state, predicate, Value(), 2, argv);
-        } catch (const Value& e) {
-            // IfAbruptCloseIterator(result, iterated).
-            IteratorObject::iteratorClose(state, iterated, e, true);
-        }
+        Value result = callAndCloseOnThrow(state, iterated, predicate, Value(), 2, argv);
 
         // If ToBoolean(result) is true, return ? IteratorClose(iterated, NormalCompletion(value)).
         if (result.toBoolean()) {
@@ -565,14 +581,7 @@ static Value builtinIteratorSome(ExecutionState& state, Value thisValue, size_t 
 
         // Let result be Completion(Call(predicate, undefined, « value, 𝔽(counter) »)).
         Value argv[2] = { value.value(), Value(counter) };
-        Value result;
-
-        try {
-            result = Object::call(state, predicate, Value(), 2, argv);
-        } catch (const Value& e) {
-            // IfAbruptCloseIterator(result, iterated).
-            IteratorObject::iteratorClose(state, iterated, e, true);
-        }
+        Value result = callAndCloseOnThrow(state, iterated, predicate, Value(), 2, argv);
 
         // If ToBoolean(result) is true, return ? IteratorClose(iterated, NormalCompletion(true)).
         if (result.toBoolean()) {
@@ -699,14 +708,7 @@ static Value builtinIteratorForEach(ExecutionState& state, Value thisValue, size
 
         // Let result be Completion(Call(procedure, undefined, « value, 𝔽(counter) »)).
         Value argv[2] = { value.value(), Value(counter) };
-        Value result;
-
-        try {
-            result = Object::call(state, procedure, Value(), 2, argv);
-        } catch (const Value& e) {
-            // IfAbruptCloseIterator(result, iterated).
-            IteratorObject::iteratorClose(state, iterated, e, true);
-        }
+        Value result = callAndCloseOnThrow(state, iterated, procedure, Value(), 2, argv);
 
         // Set counter to counter + 1.
         counter++;
@@ -897,22 +899,10 @@ static std::pair<Value, bool> iteratorFlatMapClosure(ExecutionState& state, Iter
 
         // Let mapped be Completion(Call(mapper, undefined, « value, 𝔽(counter) »)).
         Value args[2] = { value.value(), Value(closureData->counter) };
-        Value mapped;
-
-        try {
-            mapped = Object::call(state, mapper, Value(), 2, args);
-        } catch (const Value& e) {
-            // IfAbruptCloseIterator(mapped, iterated).
-            IteratorObject::iteratorClose(state, iterated, e, true);
-        }
+        Value mapped = callAndCloseOnThrow(state, iterated, mapper, Value(), 2, args);
 
         // Let innerIterator be Completion(GetIteratorFlattenable(mapped, reject-primitives)).
-        IteratorRecord* innerIterator = nullptr;
-        try {
-            innerIterator = IteratorObject::getIteratorFlattenable(state, mapped, IteratorObject::PrimitiveHandling::RejectPrimitives);
-        } catch (const Value& e) {
-            IteratorObject::iteratorClose(state, iterated, e, true);
-        }
+        IteratorRecord* innerIterator = getFlattenableOrClose(state, mapped, IteratorObject::PrimitiveHandling::RejectPrimitives, iterated);
 
         // Let innerAlive be true.
         // Set counter to counter + 1.
