@@ -80,8 +80,8 @@ static Value builtinMapConstructor(ExecutionState& state, Value thisValue, size_
             Value v = nextItem.asObject()->getIndexedProperty(state, Value(1)).value(state, nextItem);
 
             // Let status be Call(adder, map, « k.[[Value]], v.[[Value]] »).
-            Value argv[2] = { k, v };
-            Object::call(state, adder, map, 2, argv);
+            Value args[2] = { k, v };
+            Object::call(state, adder, map, 2, args);
         } catch (const Value& v) {
             // we should save thrown value bdwgc cannot track thrown value
             Value exceptionValue = v;
@@ -167,8 +167,8 @@ static Value builtinMapForEach(ExecutionState& state, Value thisValue, size_t ar
         // If e.[[Key]] is not empty, then
         if (!entries[i].first.isEmpty()) {
             // Perform ? Call(callbackfn, T, « e.[[Value]], e.[[Key]], M »).
-            Value argv[3] = { Value(entries[i].second), Value(entries[i].first), Value(M) };
-            Object::call(state, callbackfn, T, 3, argv);
+            Value args[3] = { Value(entries[i].second), Value(entries[i].first), Value(M) };
+            Object::call(state, callbackfn, T, 3, args);
         }
     }
 
