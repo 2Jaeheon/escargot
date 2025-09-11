@@ -20,15 +20,43 @@
 #ifndef __EscargotBasicString__
 #define __EscargotBasicString__
 
+#include "Escargot.h"
+#include <cstddef>
+#include <cstring>
+#include <algorithm>
+
 namespace Escargot {
 
 template <typename T, typename Allocator>
 class BasicString : public gc {
+    static T* emptyBuffer()
+    {
+        static T e[1] = { 0 };
+        return e;
+    }
+
     void makeEmpty()
     {
-        static T e[1];
-        m_buffer = e;
+        m_buffer = emptyBuffer();
         m_size = 0;
+        m_capacity = 0;
+    }
+
+    void ensureCapacity(size_t required)
+    {
+        if (required <= m_capacity)
+            return;
+
+        size_t newCapacity = m_capacity ? std::max(required, m_capacity + (m_capacity >> 1) + 1) : required;
+        T* newBuffer = allocate(newCapacity);
+        if (m_size) {
+            memcpy(newBuffer, m_buffer, sizeof(T) * m_size);
+        }
+        if (m_buffer != emptyBuffer())
+            deallocate(m_buffer, m_capacity);
+        m_buffer = newBuffer;
+        m_capacity = newCapacity;
+        m_buffer[m_size] = 0;
     }
 
 public:
@@ -40,13 +68,16 @@ public:
     BasicString(const T* src, size_t len)
         : m_buffer(allocate(len))
         , m_size(len)
+        , m_capacity(len)
     {
         memcpy(m_buffer, src, sizeof(T) * m_size);
+        m_buffer[m_size] = 0;
     }
 
     BasicString(BasicString<T, Allocator>&& other)
         : m_buffer(other.m_buffer)
         , m_size(other.size())
+        , m_capacity(other.m_capacity)
     {
         other.makeEmpty();
     }
@@ -55,8 +86,10 @@ public:
     {
         if (other.size()) {
             m_size = other.size();
-            m_buffer = allocate(m_size);
+            m_capacity = other.m_capacity ? other.m_capacity : other.m_size;
+            m_buffer = allocate(m_capacity);
             memcpy(m_buffer, other.data(), sizeof(T) * m_size);
+            m_buffer[m_size] = 0;
         } else {
             makeEmpty();
         }
@@ -68,9 +101,11 @@ public:
             return *this;
 
         if (other.size()) {
-            m_size = other.size();
-            m_buffer = allocate(m_size);
+            size_t newSize = other.size();
+            ensureCapacity(other.m_capacity ? other.m_capacity : newSize);
+            m_size = newSize;
             memcpy(m_buffer, other.data(), sizeof(T) * m_size);
+            m_buffer[m_size] = 0;
         } else {
             clear();
         }
@@ -79,19 +114,16 @@ public:
 
     ~BasicString()
     {
-        if (!m_buffer)
-            deallocate(m_buffer, m_size);
+        if (m_buffer != emptyBuffer())
+            deallocate(m_buffer, m_capacity);
     }
 
     void pushBack(const T& val)
     {
-        T* newBuffer = allocate(m_size + 1);
-        memcpy(newBuffer, m_buffer, sizeof(T) * m_size);
-        newBuffer[m_size] = val;
-        if (!m_buffer)
-            deallocate(m_buffer, m_size);
-        m_buffer = newBuffer;
+        ensureCapacity(m_size + 1);
+        m_buffer[m_size] = val;
         m_size++;
+        m_buffer[m_size] = 0;
     }
 
     void push_back(const T& val)
@@ -102,30 +134,22 @@ public:
     void append(const T* src, size_t len)
     {
         size_t newLen = m_size + len;
-        T* newBuffer = allocate(newLen);
-        memcpy(newBuffer, m_buffer, m_size * sizeof(T));
-        memcpy(newBuffer + m_size, src, len * sizeof(T));
-        if (!m_buffer)
-            deallocate(m_buffer, m_size);
-        m_buffer = newBuffer;
+        ensureCapacity(newLen);
+        memcpy(m_buffer + m_size, src, len * sizeof(T));
         m_size = newLen;
+        m_buffer[m_size] = 0;
     }
 
     void insert(size_t pos, const T& val)
     {
         ASSERT(pos < m_size);
-        T* newBuffer = allocate(m_size + 1);
-        for (size_t i = 0; i < pos; i++) {
-            newBuffer[i] = m_buffer[i];
+        ensureCapacity(m_size + 1);
+        for (size_t i = m_size; i > pos; i--) {
+            m_buffer[i] = m_buffer[i - 1];
         }
-        newBuffer[pos] = val;
-        for (size_t i = pos; i < m_size; i++) {
-            newBuffer[i + 1] = m_buffer[i];
-        }
-        if (!m_buffer)
-            deallocate(m_buffer, m_size);
-        m_buffer = newBuffer;
+        m_buffer[pos] = val;
         m_size++;
+        m_buffer[m_size] = 0;
     }
 
     void erase(size_t pos)
@@ -139,27 +163,17 @@ public:
         ASSERT(end <= m_size);
 
         size_t c = end - start;
-        if (m_size - c) {
-            T* newBuffer = allocate(m_size - c);
-            for (size_t i = 0; i < start; i++) {
-                newBuffer[i] = m_buffer[i];
+        size_t newSize = m_size - c;
+        if (newSize) {
+            if (m_size > end) {
+                for (size_t i = end; i < m_size; i++) {
+                    m_buffer[i - c] = m_buffer[i];
+                }
             }
-
-            for (size_t i = end + c; i < m_size; i++) {
-                newBuffer[i - c] = m_buffer[i];
-            }
-
-            if (!m_buffer)
-                deallocate(m_buffer, m_size);
-            m_buffer = newBuffer;
-            m_size = m_size - c;
+            m_size = newSize;
+            m_buffer[m_size] = 0;
         } else {
-            m_size = 0;
-            if (!m_buffer)
-                deallocate(m_buffer, m_size);
-            m_buffer = nullptr;
-
-            makeEmpty();
+            clear();
         }
     }
 
@@ -175,7 +189,7 @@ public:
 
     size_t capacity() const
     {
-        return m_size;
+        return m_capacity;
     }
 
     bool empty() const
@@ -185,7 +199,9 @@ public:
 
     void pop_back()
     {
-        erase(m_size - 1);
+        ASSERT(m_size > 0);
+        m_size--;
+        m_buffer[m_size] = 0;
     }
 
     T& operator[](const size_t idx)
@@ -202,11 +218,8 @@ public:
 
     void clear()
     {
-        m_size = 0;
-        if (!m_buffer)
-            deallocate(m_buffer, m_size);
-        m_buffer = nullptr;
-
+        if (m_buffer != emptyBuffer())
+            deallocate(m_buffer, m_capacity);
         makeEmpty();
     }
 
@@ -218,30 +231,30 @@ public:
     void resizeWithUninitializedValues(size_t newSize)
     {
         if (newSize) {
-            T* newBuffer = allocate(newSize);
-
-            for (size_t i = 0; i < m_size && i < newSize; i++) {
-                newBuffer[i] = m_buffer[i];
+            ensureCapacity(newSize);
+            if (newSize > m_size) {
+                // leave new values uninitialized as per contract
             }
-
             m_size = newSize;
-            if (!m_buffer)
-                deallocate(m_buffer, m_size);
-            m_buffer = newBuffer;
+            m_buffer[m_size] = 0;
         } else {
-            m_size = newSize;
-            if (!m_buffer)
-                deallocate(m_buffer, m_size);
-            m_buffer = nullptr;
-
-            makeEmpty();
+            clear();
         }
     }
 
     T* takeBuffer()
     {
         T* buf = m_buffer;
+        size_t oldCapacity = m_capacity;
         makeEmpty();
+        // Caller takes ownership of returned buffer which was allocated with Allocator.
+        // When it is not dynamically allocated (emptyBuffer), return a duplicate minimal buffer.
+        if (buf == emptyBuffer()) {
+            T* dup = allocate(0);
+            if (buf != emptyBuffer())
+                deallocate(buf, oldCapacity);
+            return dup;
+        }
         return buf;
     }
 
@@ -261,6 +274,7 @@ protected:
 private:
     T* m_buffer;
     size_t m_size;
+    size_t m_capacity;
 };
 } // namespace Escargot
 

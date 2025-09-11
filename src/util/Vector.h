@@ -20,6 +20,13 @@
 #ifndef __EscargotVector__
 #define __EscargotVector__
 
+#include "Escargot.h"
+#include <cstring>
+#include <initializer_list>
+#include <algorithm>
+#include <type_traits>
+#include <cstddef>
+
 namespace Escargot {
 
 template <typename T, bool isFundamental = std::is_fundamental<T>::value>
@@ -267,11 +274,8 @@ public:
                 Allocator().deallocate(m_buffer, oldC);
             m_buffer = newBuffer;
         } else {
-            // TODO use memmove
-            for (size_t i = m_size; i > pos; i--) {
-                m_buffer[i] = m_buffer[i - 1];
-            }
-
+            // Use memmove for efficient overlapping copy
+            memmove(&m_buffer[pos + 1], &m_buffer[pos], sizeof(T) * (m_size - pos));
             m_buffer[pos] = val;
         }
 
@@ -332,7 +336,8 @@ public:
 
     void pop_back()
     {
-        erase(m_size - 1);
+        ASSERT(m_size > 0);
+        m_size--;
     }
 
     T& operator[](const size_t idx)

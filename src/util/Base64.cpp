@@ -42,6 +42,11 @@
 #include "Escargot.h"
 #include "Base64.h"
 #include "runtime/ErrorObject.h"
+#include <tuple>
+#include <vector>
+#include <array>
+#include <cstddef>
+#include <cstdint>
 
 #include <limits.h>
 #include <simdutf.h>
@@ -340,7 +345,8 @@ static std::tuple<FromBase64ShouldThrowError, size_t, size_t, std::vector<uint8_
             } else {
                 read = srcLength;
             }
-            return std::make_tuple(FromBase64ShouldThrowError::No, read, dstLength, std::vector<uint8_t>());
+            size_t written = result.count;
+            return std::make_tuple(FromBase64ShouldThrowError::No, read, written, std::vector<uint8_t>());
         }
         case simdutf::error_code::OUTPUT_BUFFER_TOO_SMALL: {
             return std::make_tuple(FromBase64ShouldThrowError::No, result.count, dstLength, std::vector<uint8_t>());
@@ -363,8 +369,9 @@ static std::tuple<FromBase64ShouldThrowError, size_t, size_t, std::vector<uint8_
         } else {
             read = srcLength;
         }
-        output.resize(outputLength);
-        return std::make_tuple(FromBase64ShouldThrowError::No, read, outputLength, output);
+        size_t written = result.count;
+        output.resize(written);
+        return std::make_tuple(FromBase64ShouldThrowError::No, read, written, output);
     }
     case simdutf::error_code::OUTPUT_BUFFER_TOO_SMALL: {
         ASSERT_NOT_REACHED();
