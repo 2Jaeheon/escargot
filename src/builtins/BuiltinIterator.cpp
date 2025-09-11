@@ -27,6 +27,52 @@
 
 namespace Escargot {
 
+// 간단한 유효성 검사 헬퍼들 (추후 더 일반화 가능)
+static Object* requireObjectThisForIterator(ExecutionState& state, const Value& thisValue, const char* /*methodName*/)
+{
+    if (!thisValue.isObject()) {
+        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "this value is not Object");
+    }
+    return thisValue.asObject();
+}
+
+static void requireCallable(ExecutionState& state, const Value& fn, const char* errorMessage)
+{
+    if (!fn.isCallable()) {
+        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, errorMessage);
+    }
+}
+
+static IteratorRecord* getIteratorDirectFromThis(ExecutionState& state, const Value& thisValue)
+{
+    Object* obj = requireObjectThisForIterator(state, thisValue, "iterator");
+    return IteratorObject::getIteratorDirect(state, obj);
+}
+
+// limit 값을 Number -> IntegerOrInfinity로 변환하며 오류 시 IteratorClose를 수행하는 헬퍼
+static double toIntegerOrInfinityForLimitOrClose(ExecutionState& state, const Value& input, IteratorRecord* iterated, const char* onNaNMessage, const char* onNegativeMessage)
+{
+    double numLimit;
+    try {
+        numLimit = input.toNumber(state);
+    } catch (const Value& e) {
+        IteratorObject::iteratorClose(state, iterated, e, true);
+        ASSERT_NOT_REACHED();
+    }
+    if (std::isnan(numLimit)) {
+        Value error = ErrorObject::createBuiltinError(state, ErrorCode::RangeError, String::emptyString(), false, String::emptyString(), onNaNMessage, true);
+        IteratorObject::iteratorClose(state, iterated, error, true);
+        ASSERT_NOT_REACHED();
+    }
+    double integerLimit = Value(Value::DoubleToIntConvertibleTestNeeds, numLimit).toInteger(state);
+    if (integerLimit < 0) {
+        Value error = ErrorObject::createBuiltinError(state, ErrorCode::RangeError, String::emptyString(), false, String::emptyString(), onNegativeMessage, true);
+        IteratorObject::iteratorClose(state, iterated, error, true);
+        ASSERT_NOT_REACHED();
+    }
+    return integerLimit;
+}
+
 // https://tc39.es/ecma262/#sec-iterator.from
 static Value builtinIteratorFrom(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
@@ -201,19 +247,13 @@ static std::pair<Value, bool> iteratorMapClosure(ExecutionState& state, Iterator
 static Value builtinIteratorMap(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
     // Let O be the this value.
-    const Value& O = thisValue;
-    // If O is not an Object, throw a TypeError exception.
-    if (!O.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "this value is not Object");
-    }
+    Object* O = requireObjectThisForIterator(state, thisValue, "map");
     // If IsCallable(mapper) is false, throw a TypeError exception.
     const Value& mapper = argv[0];
-    if (!mapper.isCallable()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "mapper is not callable");
-    }
+    requireCallable(state, mapper, "mapper is not callable");
 
     // Let iterated be ? GetIteratorDirect(O).
-    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O.asObject());
+    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O);
     // Let result be CreateIteratorFromClosure(closure, "Iterator Helper", %IteratorHelperPrototype%, « [[UnderlyingIterator]] »).
     // Set result.[[UnderlyingIterator]] to iterated.
     IteratorHelperObject* result = new IteratorHelperObject(state, iteratorMapClosure, iterated, new IteratorData(mapper));
@@ -333,19 +373,13 @@ static std::pair<Value, bool> iteratorFilterClosure(ExecutionState& state, Itera
 static Value builtinIteratorFilter(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
     // Let O be the this value.
-    const Value& O = thisValue;
-    // If O is not an Object, throw a TypeError exception.
-    if (!O.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "this value is not Object");
-    }
+    Object* O = requireObjectThisForIterator(state, thisValue, "filter");
     // If IsCallable(predicate) is false, throw a TypeError exception.
     const Value& predicate = argv[0];
-    if (!predicate.isCallable()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "predicate is not callable");
-    }
+    requireCallable(state, predicate, "predicate is not callable");
 
     // Let iterated be ? GetIteratorDirect(O).
-    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O.asObject());
+    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O);
     // Let result be CreateIteratorFromClosure(closure, "Iterator Helper", %IteratorHelperPrototype%, « [[UnderlyingIterator]] »).
     // Set result.[[UnderlyingIterator]] to iterated.
     IteratorHelperObject* result = new IteratorHelperObject(state, iteratorFilterClosure, iterated, new IteratorData(predicate));
@@ -357,24 +391,16 @@ static Value builtinIteratorFilter(ExecutionState& state, Value thisValue, size_
 static Value builtinIteratorEvery(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
     // Let O be the this value.
-    const Value& O = thisValue;
-    // If O is not an Object, throw a TypeError exception.
-    if (!O.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "this value is not Object");
-    }
-
+    Object* O = requireObjectThisForIterator(state, thisValue, "every");
     // Let iterated be the Iterator Record { [[Iterator]]: O, [[NextMethod]]: undefined, [[Done]]: false }.
-    IteratorRecord* iterated = new IteratorRecord(O.asObject(), Value(), false);
-    // If IsCallable(predicate) is false, then
-    //   Let error be ThrowCompletion(a newly created TypeError object).
-    //   Return ? IteratorClose(iterated, error).
+    IteratorRecord* iterated = new IteratorRecord(O, Value(), false);
+    // If IsCallable(predicate) is false, then close.
     const Value& predicate = argv[0];
     if (!predicate.isCallable()) {
         return IteratorObject::iteratorClose(state, iterated, ErrorObject::createBuiltinError(state, ErrorCode::TypeError, String::emptyString(), false, String::emptyString(), "predicate is not callable", true), true);
     }
-
     // Set iterated to ? GetIteratorDirect(O).
-    iterated = IteratorObject::getIteratorDirect(state, O.asObject());
+    iterated = IteratorObject::getIteratorDirect(state, O);
     // Let counter be 0.
     size_t counter = 0;
 
@@ -412,20 +438,14 @@ static Value builtinIteratorEvery(ExecutionState& state, Value thisValue, size_t
 static Value builtinIteratorReduce(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
     // Let O be the this value.
-    const Value& O = thisValue;
-    // If O is not an Object, throw a TypeError exception.
-    if (!O.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "this value is not Object");
-    }
+    Object* O = requireObjectThisForIterator(state, thisValue, "reduce");
 
     // If IsCallable(reducer) is false, throw a TypeError exception.
     const Value& reducer = argv[0];
-    if (!reducer.isCallable()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "reducer is not callable");
-    }
+    requireCallable(state, reducer, "reducer is not callable");
 
     // Let iterated be ? GetIteratorDirect(O).
-    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O.asObject());
+    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O);
 
     // If initialValue is not present, then
     // Let accumulator be ? IteratorStepValue(iterated).
@@ -482,21 +502,14 @@ static Value builtinIteratorReduce(ExecutionState& state, Value thisValue, size_
 static Value builtinIteratorFind(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
     // Let O be the this value.
-    const Value& O = thisValue;
-
-    // If O is not an Object, throw a TypeError exception.
-    if (!O.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "this value is not Object");
-    }
+    Object* O = requireObjectThisForIterator(state, thisValue, "find");
 
     // If IsCallable(predicate) is false, throw a TypeError exception.
     const Value& predicate = argv[0];
-    if (!predicate.isCallable()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "predicate is not callable");
-    }
+    requireCallable(state, predicate, "predicate is not callable");
 
     // Set iterated to ? GetIteratorDirect(O).
-    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O.asObject());
+    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O);
 
     // Let counter be 0.
     size_t counter = 0;
@@ -535,21 +548,14 @@ static Value builtinIteratorFind(ExecutionState& state, Value thisValue, size_t 
 static Value builtinIteratorSome(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
     // Let O be the this value.
-    const Value& O = thisValue;
-
-    // If O is not an Object, throw a TypeError exception.
-    if (!O.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "this value is not Object");
-    }
+    Object* O = requireObjectThisForIterator(state, thisValue, "some");
 
     // If IsCallable(predicate) is false, throw a TypeError exception.
     const Value& predicate = argv[0];
-    if (!predicate.isCallable()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "predicate is not callable");
-    }
+    requireCallable(state, predicate, "predicate is not callable");
 
-    // Set iterated to ? GetIteratorDirect(O).
-    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O.asObject());
+    // Set iterated to ? GetIteratorDirect(O).
+    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O);
 
     // Let counter be 0.
     size_t counter = 0;
@@ -626,39 +632,13 @@ static std::pair<Value, bool> iteratorTakeClosure(ExecutionState& state, Iterato
 static Value builtinIteratorTake(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
     // Let O be the this value.
-    const Value& O = thisValue;
-    // If O is not an Object, throw a TypeError exception.
-    if (!O.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "this value is not Object");
-    }
+    Object* O = requireObjectThisForIterator(state, thisValue, "take");
     // Let iterated be the Iterator Record { [[Iterator]]: O, [[NextMethod]]: undefined, [[Done]]: false }.
-    IteratorRecord* iterated = new IteratorRecord(O.asObject(), Value(), false);
-    // Let numLimit be Completion(ToNumber(limit)).
-    // IfAbruptCloseIterator(numLimit, iterated).
-    double numLimit;
-    try {
-        numLimit = argv[0].toNumber(state);
-    } catch (const Value& e) {
-        IteratorObject::iteratorClose(state, iterated, e, true);
-        return Value();
-    }
-
-    // If numLimit is NaN, then
-    //    a. Let error be ThrowCompletion(a newly created RangeError object).
-    //    b. Return ? IteratorClose(iterated, error).
-    if (std::isnan(numLimit)) {
-        return IteratorObject::iteratorClose(state, iterated, ErrorObject::createBuiltinError(state, ErrorCode::RangeError, String::emptyString(), false, String::emptyString(), "numLimit is NaN", true), true);
-    }
-    // Let integerLimit be ! ToIntegerOrInfinity(numLimit).
-    // If integerLimit < 0, then
-    //    a. Let error be ThrowCompletion(a newly created RangeError object).
-    //    b. Return ? IteratorClose(iterated, error).
-    double integerLimit = Value(Value::DoubleToIntConvertibleTestNeeds, numLimit).toInteger(state);
-    if (integerLimit < 0) {
-        return IteratorObject::iteratorClose(state, iterated, ErrorObject::createBuiltinError(state, ErrorCode::RangeError, String::emptyString(), false, String::emptyString(), "integerLimit is negative value", true), true);
-    }
+    IteratorRecord* iterated = new IteratorRecord(O, Value(), false);
+    // Let integerLimit be ToIntegerOrInfinity(limit) with Close on error.
+    double integerLimit = toIntegerOrInfinityForLimitOrClose(state, argv[0], iterated, "numLimit is NaN", "integerLimit is negative value");
     // Set iterated to ? GetIteratorDirect(O).
-    iterated = IteratorObject::getIteratorDirect(state, O.asObject());
+    iterated = IteratorObject::getIteratorDirect(state, O);
     // Let result be CreateIteratorFromClosure(closure, "Iterator Helper", %IteratorHelperPrototype%, « [[UnderlyingIterator]] »).
     // Set result.[[UnderlyingIterator]] to iterated.
     IteratorHelperObject* result = new IteratorHelperObject(state, iteratorTakeClosure, iterated, new IteratorData(argv[0]));
@@ -669,21 +649,14 @@ static Value builtinIteratorTake(ExecutionState& state, Value thisValue, size_t 
 static Value builtinIteratorForEach(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
     // Let O be the this value.
-    const Value& O = thisValue;
-
-    // If O is not an Object, throw a TypeError exception.
-    if (!O.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "this value is not Object");
-    }
+    Object* O = requireObjectThisForIterator(state, thisValue, "forEach");
 
     // If IsCallable(procedure) is false, throw a TypeError exception.
     const Value& procedure = argv[0];
-    if (!procedure.isCallable()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "procedure is not callable");
-    }
+    requireCallable(state, procedure, "procedure is not callable");
 
-    // Set iterated to ? GetIteratorDirect(O).
-    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O.asObject());
+    // Set iterated to ? GetIteratorDirect(O).
+    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O);
 
     // Let counter be 0.
     size_t counter = 0;
@@ -762,48 +735,16 @@ static std::pair<Value, bool> iteratorDropClosure(ExecutionState& state, Iterato
 static Value builtinIteratorDrop(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
     // Let O be the this value.
-    const Value& O = thisValue;
-
-    // If O is not an Object, throw a TypeError exception.
-    if (!O.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "this value is not Object");
-    }
+    Object* O = requireObjectThisForIterator(state, thisValue, "drop");
 
     // Let iterated be the Iterator Record { [[Iterator]]: O, [[NextMethod]]: undefined, [[Done]]: false }.
-    IteratorRecord* iterated = new IteratorRecord(O.asObject(), Value(), false);
+    IteratorRecord* iterated = new IteratorRecord(O, Value(), false);
 
-    // Let numLimit be Completion(ToNumber(limit)).
-    const Value& limit = argv[0];
-    double numLimit;
-
-    try {
-        numLimit = limit.toNumber(state);
-    } catch (const Value& e) {
-        // IfAbruptCloseIterator(numLimit, iterated).
-        IteratorObject::iteratorClose(state, iterated, e, true);
-    }
-
-    // If numLimit is NaN, throw a RangeError exception.
-    if (std::isnan(numLimit)) {
-        // Let error be ThrowCompletion(a newly created RangeError object)
-        // Return ? IteratorClose(iterated, error)
-        Value error = ErrorObject::createBuiltinError(state, ErrorCode::RangeError, "limit must be a number");
-        IteratorObject::iteratorClose(state, iterated, error, true);
-    }
-
-    // Let integerLimit be ! ToIntegerOrInfinity(numLimit).
-    double integerLimit = Value(Value::DoubleToIntConvertibleTestNeeds, numLimit).toInteger(state);
-
-    // If integerLimit < 0, then
-    if (integerLimit < 0) {
-        // Let error be ThrowCompletion(a newly created RangeError object).
-        // Return ? IteratorClose(iterated, error)
-        Value error = ErrorObject::createBuiltinError(state, ErrorCode::RangeError, "limit must be a non-negative number");
-        IteratorObject::iteratorClose(state, iterated, error, true);
-    }
+    // Let integerLimit be ToIntegerOrInfinity(limit) with Close on error.
+    double integerLimit = toIntegerOrInfinityForLimitOrClose(state, argv[0], iterated, "limit must be a number", "limit must be a non-negative number");
 
     // Set iterated to ? GetIteratorDirect(O)
-    iterated = IteratorObject::getIteratorDirect(state, O.asObject());
+    iterated = IteratorObject::getIteratorDirect(state, O);
 
     // Let result be CreateIteratorFromClosure(closure, "Iterator Helper", %IteratorHelperPrototype%, « [[UnderlyingIterator]] »).
     // Set result.[[UnderlyingIterator]] to iterated.
@@ -816,13 +757,9 @@ static Value builtinIteratorDrop(ExecutionState& state, Value thisValue, size_t 
 static Value builtinIteratorToArray(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
     // Let O be the this value.
-    const Value& O = thisValue;
-    // If O is not an Object, throw a TypeError exception.
-    if (!O.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "this value is not Object");
-    }
+    Object* O = requireObjectThisForIterator(state, thisValue, "toArray");
     // Let iterated be ? GetIteratorDirect(O).
-    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O.asObject());
+    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O);
     // Let items be a new empty List.
     ValueVector items;
     // Repeat,
@@ -925,21 +862,14 @@ static std::pair<Value, bool> iteratorFlatMapClosure(ExecutionState& state, Iter
 static Value builtinIteratorFlatMap(ExecutionState& state, Value thisValue, size_t argc, Value* argv, Optional<Object*> newTarget)
 {
     // Let O be the this value.
-    const Value& O = thisValue;
-
-    // If O is not an Object, throw a TypeError exception.
-    if (!O.isObject()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "this value is not Object");
-    }
+    Object* O = requireObjectThisForIterator(state, thisValue, "flatMap");
 
     // If IsCallable(mapper) is false, throw a TypeError exception.
     const Value& mapper = argv[0];
-    if (!mapper.isCallable()) {
-        ErrorObject::throwBuiltinError(state, ErrorCode::TypeError, "mapper is not callable");
-    }
+    requireCallable(state, mapper, "mapper is not callable");
 
     // Set iterated to ? GetIteratorDirect(O).
-    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O.asObject());
+    IteratorRecord* iterated = IteratorObject::getIteratorDirect(state, O);
 
     // Let result be CreateIteratorFromClosure(closure, "Iterator Helper", %IteratorHelperPrototype%, « [[UnderlyingIterator]] »).
     // Set result.[[UnderlyingIterator]] to iterated.
