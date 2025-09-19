@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
 
 env:
   RUNNER: tools/run-tests.py
@@ -281,8 +282,11 @@ jobs:
         $RUNNER --engine="$GITHUB_WORKSPACE/result-x64/escargot" new-es
 
   update-release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.repository == 'samsung/escargot'
     needs: [check-build-mac64, check-build-mac64arm, check-build-linux, build-windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
     - name: Download build artifacts
       uses: actions/download-artifact@v4
